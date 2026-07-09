@@ -28,7 +28,7 @@ def test_reasoner_hermit_subclass_inference():
     # After reasoning, ClassA -> subClassOf -> ClassC MUST exist mathematically
     assert (ex.ClassA, RDFS.subClassOf, ex.ClassC) in expanded_g
 
-def test_reasoner_factpp_not_implemented():
-    reasoner = OntologyReasoner(backend="factpp")
+def test_reasoner_konclude_not_implemented():
+    reasoner = OntologyReasoner(backend="konclude")
     with pytest.raises(NotImplementedError):
         reasoner.materialize(Graph())
