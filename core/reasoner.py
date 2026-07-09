@@ -20,8 +20,8 @@ class OntologyReasoner:
         """
         if self.backend == "hermit":
             return self._run_hermit(graph)
-        elif self.backend == "konclude":
-            return self._run_konclude(graph)
+        elif self.backend == "custom":
+            return self._run_custom_cpp(graph)
         else:
             raise ValueError(f"Unknown reasoning backend: {self.backend}")
             
@@ -61,38 +61,44 @@ class OntologyReasoner:
             if os.path.exists(temp_xml_path):
                 os.remove(temp_xml_path)
 
-    def _run_konclude(self, graph: Graph) -> Graph:
+    def _run_custom_cpp(self, graph: Graph) -> Graph:
         """
-        Executes Konclude, the modern high-performance C++ reasoning engine.
-        Konclude won the OWL Reasoner Evaluation and is the industry standard 
-        for C++ reasoning today, replacing legacy engines like FaCT++.
+        Executes our custom-built, highly optimized C++ reasoning engine.
+        It uses N-Triples for fast I/O and computes transitive closures using BFS.
         """
-        logging.info("Starting C++ Konclude reasoning engine...")
+        logging.info("Starting Custom C++ reasoning engine...")
         import subprocess
         
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".owl") as temp_in:
-            graph.serialize(destination=temp_in.name, format="xml")
+        # 1. Serialize the graph to N-Triples (NT) format for lightning-fast C++ parsing
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".nt") as temp_in:
+            graph.serialize(destination=temp_in.name, format="nt")
             in_path = temp_in.name
             
-        out_path = in_path + "_reasoned.owl"
+        out_path = in_path + "_reasoned.nt"
         
         try:
-            # Konclude uses a specific command line structure for materialization
-            cmd = ["Konclude", "realization", "-i", in_path, "-o", out_path]
+            # 2. Invoke our compiled C++ binary
+            # Assuming the binary is built in the 'cpp_engine' folder
+            engine_binary = os.path.join(os.path.dirname(__file__), "..", "cpp_engine", "custom_reasoner")
+            
+            if not os.path.exists(engine_binary):
+                raise FileNotFoundError(f"Custom C++ engine not found at {engine_binary}. Please compile it first.")
+                
+            cmd = [engine_binary, in_path, out_path]
             
             result = subprocess.run(cmd, capture_output=True, text=True)
             
             if result.returncode != 0:
-                logging.error(f"Konclude C++ Engine Failed:\n{result.stderr}")
-                raise RuntimeError("Konclude Reasoning Engine failed to execute.")
+                logging.error(f"Custom C++ Engine Failed:\n{result.stderr}")
+                raise RuntimeError("Custom C++ Reasoning Engine failed to execute.")
                 
-            expanded_graph = Graph()
-            expanded_graph.parse(out_path, format="xml")
+            # 3. Load the newly inferred N-Triples back into the graph
+            # This merges the newly inferred triples with the existing ones
+            if os.path.exists(out_path):
+                graph.parse(out_path, format="nt")
             
-            return expanded_graph
+            return graph
             
-        except FileNotFoundError:
-            raise NotImplementedError("The modern C++ binary 'Konclude' was not found on PATH.")
         finally:
             if os.path.exists(in_path):
                 os.remove(in_path)

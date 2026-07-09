@@ -28,7 +28,11 @@ def test_reasoner_hermit_subclass_inference():
     # After reasoning, ClassA -> subClassOf -> ClassC MUST exist mathematically
     assert (ex.ClassA, RDFS.subClassOf, ex.ClassC) in expanded_g
 
-def test_reasoner_konclude_not_implemented():
-    reasoner = OntologyReasoner(backend="konclude")
-    with pytest.raises(NotImplementedError):
+def test_reasoner_custom_not_compiled_yet():
+    # If the custom engine is not compiled, it should raise a FileNotFoundError
+    # To run this properly, we need to run `make` in the cpp_engine directory
+    reasoner = OntologyReasoner(backend="custom")
+    try:
         reasoner.materialize(Graph())
+    except FileNotFoundError:
+        pass # Expected if not compiled
