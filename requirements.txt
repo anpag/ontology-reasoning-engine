@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+rdflib
+google-cloud-bigquery
+pytest
+pydantic
+python-multipart

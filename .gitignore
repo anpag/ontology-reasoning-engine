@@ -1,0 +1,19 @@
+# Virtual Environment
+venv/
+env/
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# IDEs
+.vscode/
+.idea/
+
+# Large Ontology Files
+*.owl
+*.ttl
+*.rdf
+*.nt
+*.jsonld
