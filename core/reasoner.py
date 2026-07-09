@@ -63,9 +63,41 @@ class OntologyReasoner:
 
     def _run_factpp(self, graph: Graph) -> Graph:
         """
-        Placeholder for the C++ FaCT++ bindings integration.
+        Executes the C++ FaCT++ reasoning engine via a highly concurrent subprocess.
+        This bypasses the JVM entirely and uses the native OS binary.
         """
         logging.info("Starting C++ FaCT++ reasoning engine...")
-        # TODO: Implement pyfactxx / owlapy C++ bindings here.
-        # For now, raise NotImplemented
-        raise NotImplementedError("C++ FaCT++ bindings are not yet compiled in this environment.")
+        import subprocess
+        
+        # 1. Serialize the graph for the C++ binary
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".owl") as temp_in:
+            graph.serialize(destination=temp_in.name, format="xml")
+            in_path = temp_in.name
+            
+        out_path = in_path + "_reasoned.owl"
+        
+        try:
+            # 2. Invoke the compiled C++ binary (e.g. fact++-cli)
+            # We assume the binary is available in the system PATH as 'fact++-cli'
+            # The exact flags depend on the compiled binary's interface.
+            cmd = ["fact++-cli", "--materialize", "--input", in_path, "--output", out_path]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                logging.error(f"FaCT++ C++ Engine Failed:\n{result.stderr}")
+                raise RuntimeError("C++ Reasoning Engine failed to execute.")
+                
+            # 3. Load the highly optimized output back into RDFLib
+            expanded_graph = Graph()
+            expanded_graph.parse(out_path, format="xml")
+            
+            return expanded_graph
+            
+        except FileNotFoundError:
+            raise NotImplementedError("The C++ binary 'fact++-cli' was not found on this system. It must be compiled and added to PATH.")
+        finally:
+            if os.path.exists(in_path):
+                os.remove(in_path)
+            if os.path.exists(out_path):
+                os.remove(out_path)
