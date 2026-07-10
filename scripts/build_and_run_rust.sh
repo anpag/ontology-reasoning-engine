@@ -17,8 +17,8 @@ cargo build --release
 echo "Build complete. Executing tests."
 cd ..
 
-CHEBI_PATH="../tests/chebi.owl"
-QUDT_PATH="../tests/qudt_unit.ttl"
+CHEBI_PATH="tests/chebi.owl"
+QUDT_PATH="tests/qudt_unit.ttl"
 
 # Test 1: ChEBI
 if [ -f "$CHEBI_PATH" ]; then
