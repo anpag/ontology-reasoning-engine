@@ -1,0 +1,32 @@
+@prefix ex: <http://example.org/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+
+# 1. Circular Reference Loop (A -> B -> C -> A)
+ex:ClassA rdfs:subClassOf ex:ClassB .
+ex:ClassB rdfs:subClassOf ex:ClassC .
+ex:ClassC rdfs:subClassOf ex:ClassA .
+
+# 2. Domain / Range Loop
+ex:PropertyX rdfs:domain ex:ClassD .
+ex:PropertyX rdfs:range ex:ClassE .
+ex:PropertyY rdfs:domain ex:ClassE .
+ex:PropertyY rdfs:range ex:ClassD .
+
+ex:Node1 ex:PropertyX ex:Node2 .
+ex:Node2 ex:PropertyY ex:Node1 .
+
+# 3. Equivalence Loop
+ex:ClassF owl:equivalentClass ex:ClassG .
+ex:ClassG owl:equivalentClass ex:ClassH .
+ex:ClassH owl:equivalentClass ex:ClassF .
+
+# 4. Deep Hierarchy (Stress testing recursion depth)
+ex:Level1 rdfs:subClassOf ex:Level2 .
+ex:Level2 rdfs:subClassOf ex:Level3 .
+ex:Level3 rdfs:subClassOf ex:Level4 .
+ex:Level4 rdfs:subClassOf ex:Level5 .
+ex:Level5 rdfs:subClassOf ex:Level6 .
+
+# 5. String Literals with malicious spaces and dots
+ex:Node3 rdfs:comment "This is a literal with spaces and ending dots. ." .
