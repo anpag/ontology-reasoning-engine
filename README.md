@@ -15,6 +15,19 @@ This microservice utilizes a decoupled **Python/Rust Hybrid Architecture** to gu
 3. **Reasoning Engine (Native Rust)**: 
    A custom-compiled Rust binary handles the mathematical Description Logic materialization. Leveraging `petgraph`'s `DiGraph` and `FixedBitSet` Breadth-First-Search (BFS) algorithms, it calculates the transitive closures of `rdfs:subClassOf`, `rdfs:domain`, `rdfs:range`, and `owl:equivalentClass` safely and instantly. Output is directly serialized to `.nt` (N-Triples).
 
+## Motivation & Technical Justification
+
+Standard semantic web tooling is often designed for desktop-scale ontologies and fails drastically under Enterprise-scale loads. We undertook a rigorous benchmarking journey to determine the optimal architecture for this microservice:
+
+1. **The Python Bottleneck (`rdflib` / `owlready2`)**: 
+   Initial tests utilizing standard Python libraries to parse the 1.5GB ChEBI XML ontology resulted in massive memory bloat. The parsing phase alone took **7.5 minutes**, creating an unacceptable bottleneck for a stateless HTTP API.
+2. **The C++ Risk (`raptor2`)**: 
+   We subsequently wrote a custom C++ parsing engine utilizing `librdf`/`raptor2`. While this successfully reduced XML parsing time to **21 seconds**, managing raw pointers for a graph of 16.4 million triples in a highly concurrent microservice environment posed an unacceptable risk of segmentation faults and memory leaks.
+3. **The Native Rust Solution**: 
+   By embedding the micro-crates `oxrdfxml` and `oxttl` into a purely Native Rust binary, we achieved the blistering speed of C++ deserialization while benefiting from Rust's strict compiler-guaranteed memory safety. 
+
+By offloading the mathematical DL materialization to `petgraph`, this microservice parses, infers, and serializes millions of triples in minutes without suffering from string duplication or heap fragmentation.
+
 ## Performance Benchmarks
 *Tested on an `n2-standard-4` equivalent Linux instance.*
 
