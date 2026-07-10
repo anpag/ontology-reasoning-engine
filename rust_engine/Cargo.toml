@@ -1,0 +1,7 @@
+[package]
+name = "custom_reasoner_rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# We can use minimal dependencies for native speed
