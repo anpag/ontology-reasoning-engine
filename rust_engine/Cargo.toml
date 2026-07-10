@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# We can use minimal dependencies for native speed
+oxrdf = "0.3"
+oxttl = "0.3"
+oxrdfxml = "0.3"
