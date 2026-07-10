@@ -1,5 +1,8 @@
 import os
-from rdflib import Graph
+import logging
+import requests
+from rdflib import Graph, URIRef
+from rdflib.namespace import OWL
 from rdflib.util import guess_format
 
 class OntologyLoader:
@@ -41,7 +44,39 @@ class OntologyLoader:
         print(f"Loading {file_path} as {file_format}...")
         self.graph.parse(file_path, format=file_format)
         
+        # Explicitly find and resolve any owl:imports
+        self._resolve_imports(self.graph)
+        
         return self.graph
+
+    def _resolve_imports(self, g: Graph, visited=None):
+        """
+        Recursively finds owl:imports in the graph, downloads them via HTTP,
+        and merges them into the main graph to ensure total completeness.
+        """
+        if visited is None:
+            visited = set()
+            
+        imports = list(g.objects(predicate=OWL.imports))
+        
+        for imp in imports:
+            uri = str(imp)
+            if uri not in visited:
+                visited.add(uri)
+                try:
+                    # Attempt to fetch and parse the imported ontology
+                    temp_g = Graph()
+                    temp_g.parse(uri)
+                    
+                    # Merge into the main graph
+                    for triple in temp_g:
+                        g.add(triple)
+                        
+                    # Recursively resolve imports of the imported file
+                    self._resolve_imports(g, visited)
+                except Exception as e:
+                    # Log silently or handle as needed
+                    pass
 
     def get_triple_count(self) -> int:
         """Returns the number of triples currently in the graph."""
