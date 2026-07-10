@@ -40,7 +40,7 @@ fn main() -> io::Result<()> {
 
     // 1. Natively parse using Oxigraph's blazing fast micro-crates
     if format == "xml" {
-        for triple_res in RdfXmlParser::new().parse_read(reader) {
+        for triple_res in RdfXmlParser::new().for_reader(reader) {
             if let Ok(t_ox) = triple_res {
                 let sub = t_ox.subject.to_string();
                 let pred = t_ox.predicate.as_str().to_string(); // Keep bare URI for matching
@@ -62,7 +62,7 @@ fn main() -> io::Result<()> {
             }
         }
     } else if format == "turtle" {
-        for triple_res in TurtleParser::new().parse_read(reader) {
+        for triple_res in TurtleParser::new().for_reader(reader) {
             if let Ok(t_ox) = triple_res {
                 let sub = t_ox.subject.to_string();
                 let pred = t_ox.predicate.as_str().to_string();
