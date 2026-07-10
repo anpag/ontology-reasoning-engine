@@ -4,5 +4,6 @@ rdflib
 google-cloud-bigquery
 pytest
 pydantic
+oxrdflib
 python-multipart
 owlready2

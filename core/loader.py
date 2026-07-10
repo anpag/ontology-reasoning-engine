@@ -12,7 +12,14 @@ class OntologyLoader:
     """
     
     def __init__(self):
-        self.graph = Graph()
+        # Using Oxigraph (Rust) as the backend store for Google-scale performance
+        # This replaces the slow pure-Python memory store
+        try:
+            self.graph = Graph(store="Oxigraph")
+            logging.info("Initialized RDFLib with high-performance Rust Oxigraph backend.")
+        except Exception:
+            logging.warning("Oxigraph store not available. Falling back to default Python memory store.")
+            self.graph = Graph()
         
     def load_file(self, file_path: str) -> Graph:
         """
