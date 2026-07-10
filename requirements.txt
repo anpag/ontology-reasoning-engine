@@ -1,9 +1,3 @@
 fastapi
-uvicorn[standard]
-rdflib
-google-cloud-bigquery
-pytest
-pydantic
-oxrdflib
+uvicorn
 python-multipart
-owlready2
