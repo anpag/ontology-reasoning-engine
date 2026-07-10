@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-oxrdf = "0.3"
-oxttl = "0.3"
-oxrdfxml = "0.3"
+oxrdf = "*"
+oxttl = "*"
+oxrdfxml = "*"
