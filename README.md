@@ -15,6 +15,17 @@ This microservice utilizes a decoupled **Python/Rust Hybrid Architecture** to gu
 3. **Reasoning Engine (Native Rust)**: 
    A custom-compiled Rust binary handles the mathematical Description Logic materialization. Leveraging `petgraph`'s `DiGraph` and `FixedBitSet` Breadth-First-Search (BFS) algorithms, it calculates the transitive closures of `rdfs:subClassOf`, `rdfs:domain`, `rdfs:range`, and `owl:equivalentClass` safely and instantly. Output is directly serialized to `.nt` (N-Triples).
 
+## Data Modeling & Ontology Standards
+
+This reasoning engine processes standards-compliant RDF/OWL graphs, heavily focusing on scientific interoperability using W3C and industry ontologies:
+
+*   **Allotrope (AFO) & EMMO**: Used for parsing laboratory analytics and material science semantics.
+*   **ChEBI**: Deployed for biochemical entity classifications.
+*   **QUDT (Quantities, Units, Dimensions, and Types)**: 
+    *   To allow algorithms to mathematically analyze heterogeneous global sensor data (e.g., mixing Celsius, Fahrenheit, and Kelvin), the system natively supports the QUDT structural schema. 
+    *   Measurements are never stored as flat strings (e.g., `"100 °C"`). Instead, they are structured as strictly typed `QuantityValue` subgraphs containing numeric values and pointers to canonical `Unit` nodes. 
+    *   This embeds the exact `conversionMultiplier` and `conversionOffset` math directly into the graph edges, enabling downstream databases like BigQuery to perform automated mathematical conversions via SPARQL without custom middleware.
+
 ## Motivation & Technical Justification
 
 Standard semantic web tooling is often designed for desktop-scale ontologies and fails drastically under Enterprise-scale loads. We undertook a rigorous benchmarking journey to determine the optimal architecture for this microservice:
