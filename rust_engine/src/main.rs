@@ -149,14 +149,16 @@ fn parse_content(
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 5 {
-        eprintln!("Usage: custom_reasoner_rust <format: xml|turtle> <input_file> <output.nt> <output_edges.jsonl>");
+        eprintln!("Usage: custom_reasoner_rust <format: xml|turtle> <mode: w3c|lpg> <input_file> <output_prefix>");
         std::process::exit(1);
     }
 
     let format = &args[1];
-    let input_file = &args[2];
-    let output_file = &args[3];
-    let output_edges_file = &args[4];
+    let mode = &args[2];
+    let input_file = &args[3];
+    let output_prefix = &args[4];
+    
+    let output_nt_file = format!("{}.nt", output_prefix);
 
     let mut graph: HashSet<Triple> = HashSet::new();
     let mut transitive_graphs: HashMap<String, DiGraph<String, ()>> = HashMap::new();
@@ -270,63 +272,66 @@ fn main() -> io::Result<()> {
         }
     }
 
-    let mut out = File::create(output_file)?;
+    let mut out = File::create(&output_nt_file)?;
     for t in &inferred_triples {
         writeln!(out, "{} <{}> {} .", t.sub, t.pred, t.obj)?;
     }
     println!("Petgraph Materialization Complete. Inferred {} triples.", inferred_triples.len());
 
-    // Phase 3: BigQuery Labeled Property Graph (LPG) Generation
-    // Translate standard RDF Reification patterns into rich JSON-L edges
-    let mut total_graph: HashSet<Triple> = graph.clone();
-    for t in inferred_triples {
-        total_graph.insert(t);
-    }
-
-    let statement_type_obj = format!("<{}>", STATEMENT_URI);
-    let mut statement_subjects: HashSet<String> = HashSet::new();
-    for t in &total_graph {
-        if t.pred == TYPE_URI && t.obj == statement_type_obj {
-            statement_subjects.insert(t.sub.clone());
+    if mode == "lpg" {
+        // Phase 3: BigQuery Labeled Property Graph (LPG) Generation
+        // Translate standard RDF Reification patterns into rich JSON-L edges
+        let mut total_graph: HashSet<Triple> = graph.clone();
+        for t in inferred_triples {
+            total_graph.insert(t);
         }
-    }
 
-    let mut edges_out = File::create(output_edges_file)?;
-    let mut flattened_edges_count = 0;
-
-    for s in &statement_subjects {
-        let mut src = String::new();
-        let mut edge_label = String::new();
-        let mut dst = String::new();
-        let mut properties = Map::new();
-
+        let statement_type_obj = format!("<{}>", STATEMENT_URI);
+        let mut statement_subjects: HashSet<String> = HashSet::new();
         for t in &total_graph {
-            if t.sub == *s {
-                if t.pred == SUBJECT_URI {
-                    src = t.obj.clone();
-                } else if t.pred == PREDICATE_URI {
-                    edge_label = t.obj.clone();
-                } else if t.pred == OBJECT_URI {
-                    dst = t.obj.clone();
-                } else if t.pred != TYPE_URI {
-                    // It's a property on the edge
-                    properties.insert(t.pred.clone(), json!(t.obj));
-                }
+            if t.pred == TYPE_URI && t.obj == statement_type_obj {
+                statement_subjects.insert(t.sub.clone());
             }
         }
 
-        if !src.is_empty() && !edge_label.is_empty() && !dst.is_empty() {
-            let edge_json = json!({
-                "src": src,
-                "edge_label": edge_label,
-                "dst": dst,
-                "properties": properties
-            });
-            writeln!(edges_out, "{}", edge_json.to_string())?;
-            flattened_edges_count += 1;
-        }
-    }
+        let output_edges_file = format!("{}_edges.jsonl", output_prefix);
+        let mut edges_out = File::create(&output_edges_file)?;
+        let mut flattened_edges_count = 0;
 
-    println!("BigQuery LPG Flattening Complete. Generated {} rich edges.", flattened_edges_count);
+        for s in &statement_subjects {
+            let mut src = String::new();
+            let mut edge_label = String::new();
+            let mut dst = String::new();
+            let mut properties = Map::new();
+
+            for t in &total_graph {
+                if t.sub == *s {
+                    if t.pred == SUBJECT_URI {
+                        src = t.obj.clone();
+                    } else if t.pred == PREDICATE_URI {
+                        edge_label = t.obj.clone();
+                    } else if t.pred == OBJECT_URI {
+                        dst = t.obj.clone();
+                    } else if t.pred != TYPE_URI {
+                        // It's a property on the edge
+                        properties.insert(t.pred.clone(), json!(t.obj));
+                    }
+                }
+            }
+
+            if !src.is_empty() && !edge_label.is_empty() && !dst.is_empty() {
+                let edge_json = json!({
+                    "src": src,
+                    "edge_label": edge_label,
+                    "dst": dst,
+                    "properties": properties
+                });
+                writeln!(edges_out, "{}", edge_json.to_string())?;
+                flattened_edges_count += 1;
+            }
+        }
+        println!("BigQuery LPG Flattening Complete. Generated {} rich edges.", flattened_edges_count);
+    }
+    
     Ok(())
 }
