@@ -13,12 +13,71 @@ const TYPE_URI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const DOMAIN_URI: &str = "http://www.w3.org/2000/01/rdf-schema#domain";
 const RANGE_URI: &str = "http://www.w3.org/2000/01/rdf-schema#range";
 const EQUIV_CLASS_URI: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
+// Phase 1: OWL 2 RL / EL Inference Profiles
+const INVERSE_OF_URI: &str = "http://www.w3.org/2002/07/owl#inverseOf";
+const SYMMETRIC_PROP_URI: &str = "http://www.w3.org/2002/07/owl#SymmetricProperty";
+const TRANSITIVE_PROP_URI: &str = "http://www.w3.org/2002/07/owl#TransitiveProperty";
 
 #[derive(Hash, Eq, PartialEq, Clone)]
 struct Triple {
     sub: String,
     pred: String,
     obj: String,
+}
+
+fn get_or_insert_node(uri: &str, graph_ref: &mut DiGraph<String, ()>, indices: &mut HashMap<String, NodeIndex>) -> NodeIndex {
+    if let Some(&idx) = indices.get(uri) {
+        idx
+    } else {
+        let idx = graph_ref.add_node(uri.to_string());
+        indices.insert(uri.to_string(), idx);
+        idx
+    }
+}
+
+fn process_triple(
+    sub: String, 
+    pred: String, 
+    obj: String, 
+    graph: &mut HashSet<Triple>,
+    transitive_graphs: &mut HashMap<String, DiGraph<String, ()>>,
+    transitive_indices: &mut HashMap<String, HashMap<String, NodeIndex>>,
+    domain_map: &mut HashMap<String, Vec<String>>,
+    range_map: &mut HashMap<String, Vec<String>>,
+    inverse_of_map: &mut HashMap<String, String>,
+    symmetric_props: &mut HashSet<String>,
+    transitive_props: &mut HashSet<String>,
+) {
+    let t = Triple { sub: sub.clone(), pred: pred.clone(), obj: obj.clone() };
+    
+    // Core TBox Pattern Extraction
+    if pred == SUBCLASS_URI {
+        let g = transitive_graphs.entry(SUBCLASS_URI.to_string()).or_insert_with(DiGraph::new);
+        let idx_map = transitive_indices.entry(SUBCLASS_URI.to_string()).or_insert_with(HashMap::new);
+        let sub_idx = get_or_insert_node(&sub, g, idx_map);
+        let obj_idx = get_or_insert_node(&obj, g, idx_map);
+        g.add_edge(sub_idx, obj_idx, ());
+    } else if pred == EQUIV_CLASS_URI {
+        let g = transitive_graphs.entry(SUBCLASS_URI.to_string()).or_insert_with(DiGraph::new);
+        let idx_map = transitive_indices.entry(SUBCLASS_URI.to_string()).or_insert_with(HashMap::new);
+        let sub_idx = get_or_insert_node(&sub, g, idx_map);
+        let obj_idx = get_or_insert_node(&obj, g, idx_map);
+        g.add_edge(sub_idx, obj_idx, ());
+        g.add_edge(obj_idx, sub_idx, ());
+    } else if pred == DOMAIN_URI {
+        domain_map.entry(sub.clone()).or_default().push(obj.clone());
+    } else if pred == RANGE_URI {
+        range_map.entry(sub.clone()).or_default().push(obj.clone());
+    } else if pred == INVERSE_OF_URI {
+        inverse_of_map.insert(sub.clone(), obj.clone());
+        inverse_of_map.insert(obj.clone(), sub.clone()); // Bidirectional mapping
+    } else if pred == TYPE_URI && obj == SYMMETRIC_PROP_URI {
+        symmetric_props.insert(sub.clone());
+    } else if pred == TYPE_URI && obj == TRANSITIVE_PROP_URI {
+        transitive_props.insert(sub.clone());
+    }
+    
+    graph.insert(t);
 }
 
 fn main() -> io::Result<()> {
@@ -34,136 +93,111 @@ fn main() -> io::Result<()> {
 
     let mut graph: HashSet<Triple> = HashSet::new();
     
-    // Replace manual BFS HashMaps with scalable petgraph representation
-    let mut subclass_graph = DiGraph::<String, ()>::new();
-    let mut node_indices: HashMap<String, NodeIndex> = HashMap::new();
+    // Multi-graph support for diverse Transitive Properties
+    let mut transitive_graphs: HashMap<String, DiGraph<String, ()>> = HashMap::new();
+    let mut transitive_indices: HashMap<String, HashMap<String, NodeIndex>> = HashMap::new();
     
     let mut domain_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut range_map: HashMap<String, Vec<String>> = HashMap::new();
+    let mut inverse_of_map: HashMap<String, String> = HashMap::new();
+    let mut symmetric_props: HashSet<String> = HashSet::new();
+    let mut transitive_props: HashSet<String> = HashSet::new();
 
-    let mut get_or_insert_node = |uri: &str, graph_ref: &mut DiGraph<String, ()>, indices: &mut HashMap<String, NodeIndex>| -> NodeIndex {
-        if let Some(&idx) = indices.get(uri) {
-            idx
-        } else {
-            let idx = graph_ref.add_node(uri.to_string());
-            indices.insert(uri.to_string(), idx);
-            idx
-        }
-    };
+    // RDFS subClassOf is inherently transitive
+    transitive_props.insert(SUBCLASS_URI.to_string());
 
     let file = File::open(input_file)?;
     let reader = BufReader::new(file);
 
-    // 1. Natively parse using Oxigraph's blazing fast micro-crates
+    // Parse Phase
     if format == "xml" {
         for triple_res in RdfXmlParser::new().for_reader(reader) {
             if let Ok(t_ox) = triple_res {
-                let sub = t_ox.subject.to_string();
-                let pred = t_ox.predicate.as_str().to_string();
-                let obj = t_ox.object.to_string();
-
-                let t = Triple { sub: sub.clone(), pred: pred.clone(), obj: obj.clone() };
-                
-                if pred == SUBCLASS_URI {
-                    let sub_idx = get_or_insert_node(&sub, &mut subclass_graph, &mut node_indices);
-                    let obj_idx = get_or_insert_node(&obj, &mut subclass_graph, &mut node_indices);
-                    subclass_graph.add_edge(sub_idx, obj_idx, ());
-                } else if pred == EQUIV_CLASS_URI {
-                    let sub_idx = get_or_insert_node(&sub, &mut subclass_graph, &mut node_indices);
-                    let obj_idx = get_or_insert_node(&obj, &mut subclass_graph, &mut node_indices);
-                    subclass_graph.add_edge(sub_idx, obj_idx, ());
-                    subclass_graph.add_edge(obj_idx, sub_idx, ());
-                } else if pred == DOMAIN_URI {
-                    domain_map.entry(sub.clone()).or_default().push(obj.clone());
-                } else if pred == RANGE_URI {
-                    range_map.entry(sub.clone()).or_default().push(obj.clone());
-                }
-                graph.insert(t);
+                process_triple(
+                    t_ox.subject.to_string(), t_ox.predicate.as_str().to_string(), t_ox.object.to_string(),
+                    &mut graph, &mut transitive_graphs, &mut transitive_indices,
+                    &mut domain_map, &mut range_map, &mut inverse_of_map, &mut symmetric_props, &mut transitive_props
+                );
             }
         }
     } else if format == "turtle" {
         for triple_res in TurtleParser::new().for_reader(reader) {
             if let Ok(t_ox) = triple_res {
-                let sub = t_ox.subject.to_string();
-                let pred = t_ox.predicate.as_str().to_string();
-                let obj = t_ox.object.to_string();
-
-                let t = Triple { sub: sub.clone(), pred: pred.clone(), obj: obj.clone() };
-                
-                if pred == SUBCLASS_URI {
-                    let sub_idx = get_or_insert_node(&sub, &mut subclass_graph, &mut node_indices);
-                    let obj_idx = get_or_insert_node(&obj, &mut subclass_graph, &mut node_indices);
-                    subclass_graph.add_edge(sub_idx, obj_idx, ());
-                } else if pred == EQUIV_CLASS_URI {
-                    let sub_idx = get_or_insert_node(&sub, &mut subclass_graph, &mut node_indices);
-                    let obj_idx = get_or_insert_node(&obj, &mut subclass_graph, &mut node_indices);
-                    subclass_graph.add_edge(sub_idx, obj_idx, ());
-                    subclass_graph.add_edge(obj_idx, sub_idx, ());
-                } else if pred == DOMAIN_URI {
-                    domain_map.entry(sub.clone()).or_default().push(obj.clone());
-                } else if pred == RANGE_URI {
-                    range_map.entry(sub.clone()).or_default().push(obj.clone());
-                }
-                graph.insert(t);
+                process_triple(
+                    t_ox.subject.to_string(), t_ox.predicate.as_str().to_string(), t_ox.object.to_string(),
+                    &mut graph, &mut transitive_graphs, &mut transitive_indices,
+                    &mut domain_map, &mut range_map, &mut inverse_of_map, &mut symmetric_props, &mut transitive_props
+                );
             }
+        }
+    }
+
+    // ABox Graph Materialization for dynamically discovered Transitive Properties
+    for t in &graph {
+        if transitive_props.contains(&t.pred) && t.pred != SUBCLASS_URI {
+            let g = transitive_graphs.entry(t.pred.clone()).or_insert_with(DiGraph::new);
+            let idx_map = transitive_indices.entry(t.pred.clone()).or_insert_with(HashMap::new);
+            let sub_idx = get_or_insert_node(&t.sub, g, idx_map);
+            let obj_idx = get_or_insert_node(&t.obj, g, idx_map);
+            g.add_edge(sub_idx, obj_idx, ());
         }
     }
 
     println!("Graph successfully parsed. Triples: {}", graph.len());
-
     let mut inferred_triples: HashSet<Triple> = HashSet::new();
 
-    // Rule 1: Transitive Closure for SubClassOf (Petgraph BFS)
-    for start_idx in subclass_graph.node_indices() {
-        let mut bfs = Bfs::new(&subclass_graph, start_idx);
-        let start_node_uri = subclass_graph.node_weight(start_idx).unwrap().clone();
-        
-        while let Some(visited_idx) = bfs.next(&subclass_graph) {
-            if visited_idx != start_idx {
-                let visited_uri = subclass_graph.node_weight(visited_idx).unwrap().clone();
-                let t = Triple {
-                    sub: start_node_uri.clone(),
-                    pred: SUBCLASS_URI.to_string(),
-                    obj: visited_uri,
-                };
-                if !graph.contains(&t) {
-                    inferred_triples.insert(t);
-                }
-            }
-        }
-    }
-
-    // Rules 2 & 3: Domain and Range Type Inference
-    for t in &graph {
-        if let Some(domains) = domain_map.get(&t.pred) {
-            for dom in domains {
-                let inf_t = Triple {
-                    sub: t.sub.clone(),
-                    pred: TYPE_URI.to_string(),
-                    obj: dom.clone(),
-                };
-                if !graph.contains(&inf_t) {
-                    inferred_triples.insert(inf_t);
-                }
-            }
-        }
-        if let Some(ranges) = range_map.get(&t.pred) {
-            if !t.obj.starts_with('"') {
-                for ran in ranges {
-                    let inf_t = Triple {
-                        sub: t.obj.clone(),
-                        pred: TYPE_URI.to_string(),
-                        obj: ran.clone(),
+    // Inference Rule 1: Transitive Closures (SubClassOf + Custom TransitiveProperties)
+    for (pred_uri, g) in &transitive_graphs {
+        for start_idx in g.node_indices() {
+            let mut bfs = Bfs::new(g, start_idx);
+            let start_node_uri = g.node_weight(start_idx).unwrap().clone();
+            
+            while let Some(visited_idx) = bfs.next(g) {
+                if visited_idx != start_idx {
+                    let visited_uri = g.node_weight(visited_idx).unwrap().clone();
+                    let t = Triple {
+                        sub: start_node_uri.clone(),
+                        pred: pred_uri.clone(),
+                        obj: visited_uri,
                     };
-                    if !graph.contains(&inf_t) {
-                        inferred_triples.insert(inf_t);
+                    if !graph.contains(&t) {
+                        inferred_triples.insert(t);
                     }
                 }
             }
         }
     }
 
-    // 3. Write inferred triples out
+    // Inference Rule 2: Domain, Range, Symmetric, InverseOf
+    for t in &graph {
+        // Domain
+        if let Some(domains) = domain_map.get(&t.pred) {
+            for dom in domains {
+                let inf_t = Triple { sub: t.sub.clone(), pred: TYPE_URI.to_string(), obj: dom.clone() };
+                if !graph.contains(&inf_t) { inferred_triples.insert(inf_t); }
+            }
+        }
+        // Range
+        if let Some(ranges) = range_map.get(&t.pred) {
+            if !t.obj.starts_with('"') {
+                for ran in ranges {
+                    let inf_t = Triple { sub: t.obj.clone(), pred: TYPE_URI.to_string(), obj: ran.clone() };
+                    if !graph.contains(&inf_t) { inferred_triples.insert(inf_t); }
+                }
+            }
+        }
+        // Symmetric Property
+        if symmetric_props.contains(&t.pred) {
+            let inf_t = Triple { sub: t.obj.clone(), pred: t.pred.clone(), obj: t.sub.clone() };
+            if !graph.contains(&inf_t) { inferred_triples.insert(inf_t); }
+        }
+        // InverseOf Property
+        if let Some(inv_pred) = inverse_of_map.get(&t.pred) {
+            let inf_t = Triple { sub: t.obj.clone(), pred: inv_pred.clone(), obj: t.sub.clone() };
+            if !graph.contains(&inf_t) { inferred_triples.insert(inf_t); }
+        }
+    }
+
     let mut out = File::create(output_file)?;
     for t in &inferred_triples {
         writeln!(out, "{} <{}> {} .", t.sub, t.pred, t.obj)?;
