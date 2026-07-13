@@ -2,7 +2,7 @@
 
 **Disclaimer:** This is a personal development project. It is not an official product of Google, nor is it endorsed by or affiliated with Google in any way.
 
-A highly scalable, memory-safe microservice designed to ingest massive Semantic Web Ontologies (OWL, Turtle, JSON-LD) and apply rigorous Description Logic materialization via Forward Chaining.
+A highly scalable, memory-safe microservice designed to ingest massive Semantic Web Ontologies (OWL, Turtle, JSON-LD) and apply rigorous Description Logic materialization via Forward Chaining. It natively supports **OWL 2 RL/EL Profiles**, **eXtreme Design (XD) Modularity**, and **BigQuery Labeled Property Graph (LPG)** projections.
 
 ## Architecture Overview
 
@@ -10,34 +10,57 @@ This microservice utilizes a decoupled **Python/Rust Hybrid Architecture** to gu
 
 1. **API Layer (Python 3.11 / FastAPI)**: 
    Acts as a stateless, non-blocking HTTP router. It asynchronously handles file uploads and coordinates the backend processes to prevent HTTP timeouts.
-2. **Parsing Layer (Rust Oxigraph)**: 
-   To prevent memory bottlenecks during gigabyte-scale XML parsing, the engine statically embeds the native Rust `oxrdfxml` and `oxttl` micro-libraries, achieving native C++ deserialization speeds.
+2. **Parsing Layer (Rust Oxigraph & Reqwest)**: 
+   To prevent memory bottlenecks during gigabyte-scale XML parsing, the engine statically embeds the native Rust `oxrdfxml` and `oxttl` micro-libraries, achieving native C++ deserialization speeds. It uses `reqwest` to recursively resolve HTTP-based `owl:imports`.
 3. **Reasoning Engine (Native Rust)**: 
-   A custom-compiled Rust binary handles the mathematical Description Logic materialization. Leveraging `petgraph`'s `DiGraph` and `FixedBitSet` Breadth-First-Search (BFS) algorithms, it calculates the transitive closures of `rdfs:subClassOf`, `rdfs:domain`, `rdfs:range`, and `owl:equivalentClass` safely and instantly. Output is directly serialized to `.nt` (N-Triples).
+   A custom-compiled Rust binary handles the mathematical Description Logic materialization. Leveraging `petgraph`'s `DiGraph` and `FixedBitSet` Breadth-First-Search (BFS) algorithms, it calculates the transitive closures of `rdfs:subClassOf`, `rdfs:domain`, `rdfs:range`, `owl:equivalentClass`, and custom `owl:TransitiveProperty` logic safely and instantly.
 
-## Data Modeling & Ontology Standards
+## Advanced W3C Engineering Features
 
-This reasoning engine processes standards-compliant RDF/OWL graphs, heavily focusing on scientific interoperability using W3C and industry ontologies:
+### 1. OWL 2 RL / EL Inference Rules
+Unlike basic RDFS inferencers, our Rust engine supports deep logical constraints typically reserved for heavy Java/JVM reasoners (like HermiT or Pellet).
+*   **`owl:SymmetricProperty`**: (e.g., `skos:exactMatch` or `foaf:knows`). If `A knows B`, the engine automatically infers `B knows A`.
+*   **`owl:inverseOf`**: (e.g., `skos:broader` and `skos:narrower`). If `ConceptA broader ConceptB`, the engine infers `ConceptB narrower ConceptA`.
+*   **`owl:TransitiveProperty`**: Beyond the standard `subClassOf`, the engine dynamically discovers any custom transitive property (like `skos:broaderTransitive` or `partOf`) and compiles dedicated in-memory graphs to resolve transitive closures in milliseconds.
 
-*   **Allotrope (AFO) & EMMO**: Used for parsing laboratory analytics and material science semantics.
-*   **ChEBI**: Deployed for biochemical entity classifications.
-*   **QUDT (Quantities, Units, Dimensions, and Types)**: 
-    *   To allow algorithms to mathematically analyze heterogeneous global sensor data (e.g., mixing Celsius, Fahrenheit, and Kelvin), the system natively supports the QUDT structural schema. 
-    *   Measurements are never stored as flat strings (e.g., `"100 °C"`). Instead, they are structured as strictly typed `QuantityValue` subgraphs containing numeric values and pointers to canonical `Unit` nodes. 
-    *   This embeds the exact `conversionMultiplier` and `conversionOffset` math directly into the graph edges, enabling downstream databases like BigQuery to perform automated mathematical conversions via SPARQL without custom middleware.
+### 2. eXtreme Design (XD) & Modular Ontology Merging
+Monolithic ontologies are a relic of the past. Modern ontology engineering emphasizes modularity. 
+When parsing a file, our engine actively detects `owl:imports` triples. It queues the target URIs and natively fires HTTP GET requests to resolve, download, and seamlessly merge the imported dependencies (e.g., FOAF or SKOS specs) into the unified graph memory space prior to inference.
 
-## Motivation & Technical Justification
+### 3. BigQuery Labeled Property Graph (LPG) Generation
+**The Problem**: The W3C RDF standard strictly forbids edges from having properties. If a sensor records a temperature of 100°C with 99% confidence, RDF forces you to create an intermediate "Observation" or "Statement" node (Reification). This destroys SQL performance by forcing complex, multi-hop joins.
+**The Solution**: Our engine bridges the gap between Academic RDF and Enterprise Data Warehousing. When executing in `lpg` mode, the engine hunts for Reification nodes (`rdf:Statement`). It mathematically collapses these intermediate structures and maps them directly into flat, high-performance BigQuery Labeled Property Graphs (`.jsonl`), embedding all metadata as JSON key-value properties directly on the edge!
 
-Standard semantic web tooling is often designed for desktop-scale ontologies and fails drastically under Enterprise-scale loads. We undertook a rigorous benchmarking journey to determine the optimal architecture for this microservice:
+## CLI Usage Modes
 
-1. **The Python Bottleneck (`rdflib` / `owlready2`)**: 
-   Initial tests utilizing standard Python libraries to parse the 1.5GB ChEBI XML ontology resulted in massive memory bloat. The parsing phase alone took **7.5 minutes**, creating an unacceptable bottleneck for a stateless HTTP API.
-2. **The C++ Risk (`raptor2`)**: 
-   We subsequently wrote a custom C++ parsing engine utilizing `librdf`/`raptor2`. While this successfully reduced XML parsing time to **21 seconds**, managing raw pointers for a graph of 16.4 million triples in a highly concurrent microservice environment posed an unacceptable risk of segmentation faults and memory leaks.
-3. **The Native Rust Solution**: 
-   By embedding the micro-crates `oxrdfxml` and `oxttl` into a purely Native Rust binary, we achieved the blistering speed of C++ deserialization while benefiting from Rust's strict compiler-guaranteed memory safety. 
+The core Rust engine is executed via the CLI. It requires you to explicitly select an execution mode based on your architectural needs.
 
-By offloading the mathematical DL materialization to `petgraph`, this microservice parses, infers, and serializes millions of triples in minutes without suffering from string duplication or heap fragmentation.
+### Mode 1: Strict W3C Compliance (`w3c`)
+Best for traditional academic semantic web pipelines. Only generates standard N-Triples.
+```bash
+./target/release/custom_reasoner_rust turtle w3c my_ontology.ttl output_w3c
+# Result: Generates output_w3c.nt containing pure RDF triples.
+```
+
+### Mode 2: BigQuery Property Graph (`lpg`)
+Best for high-performance Google Cloud analytics and OBDA (Ontology-Based Data Access).
+```bash
+./target/release/custom_reasoner_rust turtle lpg my_ontology.ttl output_lpg
+# Result: Generates output_lpg.nt AND output_lpg_edges.jsonl
+```
+
+**Example JSON-L Output (`output_lpg_edges.jsonl`):**
+```json
+{
+  "src": "<http://example.org/ExperimentA>",
+  "edge_label": "<http://example.org/hasTemperature>",
+  "dst": "\"100\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+  "properties": {
+    "http://example.org/unit": "\"Celsius\"",
+    "http://example.org/confidence": "\"0.99\"^^<http://www.w3.org/2001/XMLSchema#float>"
+  }
+}
+```
 
 ## Performance Benchmarks & Engine Comparisons
 *Tested on an `n2-standard-4` equivalent Linux instance.*
@@ -49,17 +72,9 @@ By offloading the mathematical DL materialization to `petgraph`, this microservi
 | **ChEBI** | Native Rust | XML | 9,521,942 | 6,952,622 | **5m 31.6s** |
 | **GO (Gene Ontology)** | HermiT (Java/JVM) | XML | 1,444,892 | 926,782 | 1m 38.9s (98.9s) |
 | **GO (Gene Ontology)** | Native Rust | XML | 1,444,892 | 926,782 | **42.5s** |
-| **QUDT** | Native Rust | Turtle | 42,435 | 0 | **0.12s** |
+| **FOAF + SKOS (Modular)**| Native Rust (`lpg`) | Turtle | 634 | 30 | **< 1.0s** |
 
 *\*Note: HermiT required 32GB of allocated JVM Heap Space to complete the NCIT benchmark without throwing an `OutOfMemoryError`.*
-
-### What are "Inferred Triples"?
-In a semantic knowledge graph, not all relationships are explicitly stated. If an ontology states that *Aspirin* is a *Painkiller*, and a *Painkiller* is a *Drug*, the graph implicitly knows that *Aspirin* is a *Drug*. **Inferred Triples** are the new, mathematically deduced relationships our engine generates (via Transitive Closure rules like `rdfs:subClassOf`) that were not present in the original file. Materializing these inferred triples ahead of time means BigQuery can execute standard queries instantly without needing to calculate hierarchies on the fly.
-
-### Comparison with Standard Reasoners
-Most standard semantic reasoners (e.g., **HermiT**, **Pellet**) are built on the Java Virtual Machine (JVM). 
-*   **JVM Overhead:** When processing extreme Google-scale ontologies (10M+ triples), JVM-based reasoners typically encounter catastrophic `OutOfMemoryError` (OOM) exceptions unless provisioned with massive, costly RAM allocations. Even when they succeed, Java's garbage collection pauses severely bottleneck processing times, often taking hours.
-*   **ELK Reasoner:** While **ELK** is highly optimized for OWL EL profiles, our custom Rust implementation focuses on direct RDFS+ DL materialization. By leveraging `petgraph`'s bitsets and zero-cost abstractions, we bypass JVM bloat entirely, achieving bare-metal execution speeds while calculating millions of inferences in under 6 minutes.
 
 ## Quick Start (Local Development)
 
@@ -101,28 +116,3 @@ gcloud run deploy ontology-reasoner \
   --cpu 4 \
   --allow-unauthenticated
 ```
-
-## API Documentation
-
-### `POST /ingest`
-Ingests an ontology and processes it asynchronously.
-
-**Form Data:**
-* `file`: The raw ontology file (e.g. `.owl` or `.ttl`).
-* `format`: The parsing format (must be `"xml"` or `"turtle"`).
-
-**Response (200 OK):**
-```json
-{
-  "status": "accepted",
-  "message": "Ontology received. Reasoning started in the background.",
-  "job_id": "tmp12345.xml"
-}
-```
-
-### `GET /result/{job_id}`
-Retrieves the materialized N-Triples output graph.
-
-**Response:**
-* **200 OK**: Streams the `_reasoned.nt` N-Triples file.
-* **404 Not Found**: If the processing is still ongoing or the `job_id` is invalid.
