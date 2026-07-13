@@ -39,13 +39,21 @@ Standard semantic web tooling is often designed for desktop-scale ontologies and
 
 By offloading the mathematical DL materialization to `petgraph`, this microservice parses, infers, and serializes millions of triples in minutes without suffering from string duplication or heap fragmentation.
 
-## Performance Benchmarks
+## Performance Benchmarks & Engine Comparisons
 *Tested on an `n2-standard-4` equivalent Linux instance.*
 
-| Ontology | Format | Initial Triples | Inferred Triples | Total Processing Time | Memory Safety |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **ChEBI** | XML | 9,521,942 | 6,952,622 | 5m 31.6s | Guaranteed (Rust) |
-| **QUDT** | Turtle | 42,435 | 0 | 0.12s | Guaranteed (Rust) |
+| Ontology | Format | Initial Triples | Inferred Triples | Total Processing Time |
+| :--- | :--- | :--- | :--- | :--- |
+| **ChEBI** | XML | 9,521,942 | 6,952,622 | 5m 31.6s |
+| **QUDT** | Turtle | 42,435 | 0 | 0.12s |
+
+### What are "Inferred Triples"?
+In a semantic knowledge graph, not all relationships are explicitly stated. If an ontology states that *Aspirin* is a *Painkiller*, and a *Painkiller* is a *Drug*, the graph implicitly knows that *Aspirin* is a *Drug*. **Inferred Triples** are the new, mathematically deduced relationships our engine generates (via Transitive Closure rules like `rdfs:subClassOf`) that were not present in the original file. Materializing these inferred triples ahead of time means BigQuery can execute standard queries instantly without needing to calculate hierarchies on the fly.
+
+### Comparison with Standard Reasoners
+Most standard semantic reasoners (e.g., **HermiT**, **Pellet**) are built on the Java Virtual Machine (JVM). 
+*   **JVM Overhead:** When processing extreme Google-scale ontologies (10M+ triples), JVM-based reasoners typically encounter catastrophic `OutOfMemoryError` (OOM) exceptions unless provisioned with massive, costly RAM allocations. Even when they succeed, Java's garbage collection pauses severely bottleneck processing times, often taking hours.
+*   **ELK Reasoner:** While **ELK** is highly optimized for OWL EL profiles, our custom Rust implementation focuses on direct RDFS+ DL materialization. By leveraging `petgraph`'s bitsets and zero-cost abstractions, we bypass JVM bloat entirely, achieving bare-metal execution speeds while calculating millions of inferences in under 6 minutes.
 
 ## Quick Start (Local Development)
 
