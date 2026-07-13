@@ -1,4 +1,4 @@
-# Reasoning Engine Benchmarking Report
+# GEB Benchmarking Report
 
 ## Executive Summary
 As part of the architecture design for the new Ontology Materialization Microservice, we conducted a benchmark test against three widely-used Semantic Web reasoning engines. The goal was to establish a performance and completeness baseline using the massive **Gene Ontology (GO)**, which serves as a stress test for Description Logic (DL) algorithms.

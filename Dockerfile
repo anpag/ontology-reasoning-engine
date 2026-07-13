@@ -26,8 +26,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the pre-compiled Rust binary from the builder stage
 # This ensures zero Rust compilation dependencies exist in production
-COPY --from=builder /usr/src/app/rust_engine/target/release/custom_reasoner_rust /app/rust_engine/target/release/custom_reasoner_rust
-RUN chmod +x /app/rust_engine/target/release/custom_reasoner_rust
+COPY --from=builder /usr/src/app/rust_engine/target/release/geb_engine /app/rust_engine/target/release/geb_engine
+RUN chmod +x /app/rust_engine/target/release/geb_engine
 
 # Copy the Python API and Core Logic
 COPY api/ ./api/

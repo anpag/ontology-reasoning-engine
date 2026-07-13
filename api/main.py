@@ -6,7 +6,7 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPExcept
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="Ontology Reasoning Engine")
+app = FastAPI(title="GEB: Graph Entailment Backplane")
 logging.basicConfig(level=logging.INFO)
 
 class IngestResponse(BaseModel):
@@ -22,7 +22,7 @@ def process_ontology_background(file_path: str, format: str, out_nt: str):
         logging.info(f"Starting background processing for {file_path}")
         
         # 1. Run Native Rust Engine
-        rust_binary = os.path.join(os.path.dirname(__file__), "..", "rust_engine", "target", "release", "custom_reasoner_rust")
+        rust_binary = os.path.join(os.path.dirname(__file__), "..", "rust_engine", "target", "release", "geb_engine")
         
         if not os.path.exists(rust_binary):
             logging.error(f"Rust binary not found at {rust_binary}. Have you run `cargo build --release`?")

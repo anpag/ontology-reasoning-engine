@@ -149,7 +149,7 @@ fn parse_content(
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 5 {
-        eprintln!("Usage: custom_reasoner_rust <format: xml|turtle> <mode: w3c|lpg> <input_file> <output_prefix>");
+        eprintln!("Usage: geb_engine <format: xml|turtle> <mode: w3c|lpg> <input_file> <output_prefix>");
         std::process::exit(1);
     }
 

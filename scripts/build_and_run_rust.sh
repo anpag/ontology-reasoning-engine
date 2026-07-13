@@ -25,7 +25,7 @@ if [ -f "$CHEBI_PATH" ]; then
     echo "========================================"
     echo "Testing ChEBI (XML Format)"
     echo "========================================"
-    time ./rust_engine/target/release/custom_reasoner_rust xml "$CHEBI_PATH" /tmp/chebi_out.nt
+    time ./rust_engine/target/release/geb_engine xml "$CHEBI_PATH" /tmp/chebi_out.nt
 else
     echo "ChEBI file not found at $CHEBI_PATH"
 fi
@@ -35,7 +35,7 @@ if [ -f "$QUDT_PATH" ]; then
     echo "========================================"
     echo "Testing QUDT (Turtle Format)"
     echo "========================================"
-    time ./rust_engine/target/release/custom_reasoner_rust turtle "$QUDT_PATH" /tmp/qudt_out.nt
+    time ./rust_engine/target/release/geb_engine turtle "$QUDT_PATH" /tmp/qudt_out.nt
 else
     echo "QUDT file not found at $QUDT_PATH"
 fi

@@ -1,4 +1,4 @@
-# Enterprise Scale Ontology Reasoning Engine
+# GEB: Graph Entailment Backplane
 
 **Disclaimer:** This is a personal development project. It is not an official product of Google, nor is it endorsed by or affiliated with Google in any way.
 
@@ -38,14 +38,14 @@ The core Rust engine is executed via the CLI. It requires you to explicitly sele
 ### Mode 1: Strict W3C Compliance (`w3c`)
 Best for traditional academic semantic web pipelines. Only generates standard N-Triples.
 ```bash
-./target/release/custom_reasoner_rust turtle w3c my_ontology.ttl output_w3c
+./target/release/geb_engine turtle w3c my_ontology.ttl output_w3c
 # Result: Generates output_w3c.nt containing pure RDF triples.
 ```
 
 ### Mode 2: BigQuery Property Graph (`lpg`)
 Best for high-performance Google Cloud analytics and OBDA (Ontology-Based Data Access).
 ```bash
-./target/release/custom_reasoner_rust turtle lpg my_ontology.ttl output_lpg
+./target/release/geb_engine turtle lpg my_ontology.ttl output_lpg
 # Result: Generates output_lpg.nt AND output_lpg_edges.jsonl
 ```
 
@@ -103,14 +103,14 @@ This repository utilizes a **Multi-Stage Docker Build**.
 
 ```bash
 # Build the highly optimized Docker Image
-docker build -t your-registry/ontology-reasoner .
+docker build -t your-registry/geb-engine .
 
 # Push to your Container Registry
-docker push your-registry/ontology-reasoner
+docker push your-registry/geb-engine
 
 # Deploy to your managed container platform
-gcloud run deploy ontology-reasoner \
-  --image your-registry/ontology-reasoner \
+gcloud run deploy geb-engine \
+  --image your-registry/geb-engine \
   --platform managed \
   --memory 8Gi \
   --cpu 4 \
