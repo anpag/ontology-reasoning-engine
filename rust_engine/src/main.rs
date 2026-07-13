@@ -1,12 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::fs;
 use std::fs::File;
-use std::io::{self, BufReader, Write};
+use std::io::{self, Cursor, Write};
 
 use oxrdfxml::RdfXmlParser;
 use oxttl::TurtleParser;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::Bfs;
+use reqwest;
 
 const SUBCLASS_URI: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 const TYPE_URI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -17,6 +19,8 @@ const EQUIV_CLASS_URI: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
 const INVERSE_OF_URI: &str = "http://www.w3.org/2002/07/owl#inverseOf";
 const SYMMETRIC_PROP_URI: &str = "http://www.w3.org/2002/07/owl#SymmetricProperty";
 const TRANSITIVE_PROP_URI: &str = "http://www.w3.org/2002/07/owl#TransitiveProperty";
+// Phase 2: Modular Modeling & eXtreme Design
+const IMPORTS_URI: &str = "http://www.w3.org/2002/07/owl#imports";
 
 #[derive(Hash, Eq, PartialEq, Clone)]
 struct Triple {
@@ -80,6 +84,63 @@ fn process_triple(
     graph.insert(t);
 }
 
+fn parse_content(
+    content: &[u8],
+    format_hint: &str,
+    graph: &mut HashSet<Triple>,
+    transitive_graphs: &mut HashMap<String, DiGraph<String, ()>>,
+    transitive_indices: &mut HashMap<String, HashMap<String, NodeIndex>>,
+    domain_map: &mut HashMap<String, Vec<String>>,
+    range_map: &mut HashMap<String, Vec<String>>,
+    inverse_of_map: &mut HashMap<String, String>,
+    symmetric_props: &mut HashSet<String>,
+    transitive_props: &mut HashSet<String>,
+    imports_queue: &mut Vec<String>,
+) {
+    let mut try_parse = |is_xml: bool| -> bool {
+        let mut success = false;
+        let reader = Cursor::new(content);
+        if is_xml {
+            for triple_res in RdfXmlParser::new().for_reader(reader) {
+                if let Ok(t_ox) = triple_res {
+                    success = true;
+                    let sub = t_ox.subject.to_string();
+                    let pred = t_ox.predicate.as_str().to_string();
+                    let obj = t_ox.object.to_string();
+                    
+                    if pred == IMPORTS_URI {
+                        let clean_url = obj.trim_start_matches('<').trim_end_matches('>').to_string();
+                        imports_queue.push(clean_url);
+                    }
+                    process_triple(sub, pred, obj, graph, transitive_graphs, transitive_indices, domain_map, range_map, inverse_of_map, symmetric_props, transitive_props);
+                }
+            }
+        } else {
+            for triple_res in TurtleParser::new().for_reader(reader) {
+                if let Ok(t_ox) = triple_res {
+                    success = true;
+                    let sub = t_ox.subject.to_string();
+                    let pred = t_ox.predicate.as_str().to_string();
+                    let obj = t_ox.object.to_string();
+                    
+                    if pred == IMPORTS_URI {
+                        let clean_url = obj.trim_start_matches('<').trim_end_matches('>').to_string();
+                        imports_queue.push(clean_url);
+                    }
+                    process_triple(sub, pred, obj, graph, transitive_graphs, transitive_indices, domain_map, range_map, inverse_of_map, symmetric_props, transitive_props);
+                }
+            }
+        }
+        success
+    };
+
+    let first_try = if format_hint == "xml" { true } else { false };
+    if !try_parse(first_try) {
+        // Fallback to the other parser if the hint was wrong
+        try_parse(!first_try);
+    }
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 4 {
@@ -92,45 +153,58 @@ fn main() -> io::Result<()> {
     let output_file = &args[3];
 
     let mut graph: HashSet<Triple> = HashSet::new();
-    
-    // Multi-graph support for diverse Transitive Properties
     let mut transitive_graphs: HashMap<String, DiGraph<String, ()>> = HashMap::new();
     let mut transitive_indices: HashMap<String, HashMap<String, NodeIndex>> = HashMap::new();
-    
     let mut domain_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut range_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut inverse_of_map: HashMap<String, String> = HashMap::new();
     let mut symmetric_props: HashSet<String> = HashSet::new();
     let mut transitive_props: HashSet<String> = HashSet::new();
-
-    // RDFS subClassOf is inherently transitive
     transitive_props.insert(SUBCLASS_URI.to_string());
 
-    let file = File::open(input_file)?;
-    let reader = BufReader::new(file);
+    let mut imports_queue: Vec<String> = Vec::new();
+    let mut visited_urls: HashSet<String> = HashSet::new();
 
-    // Parse Phase
-    if format == "xml" {
-        for triple_res in RdfXmlParser::new().for_reader(reader) {
-            if let Ok(t_ox) = triple_res {
-                process_triple(
-                    t_ox.subject.to_string(), t_ox.predicate.as_str().to_string(), t_ox.object.to_string(),
-                    &mut graph, &mut transitive_graphs, &mut transitive_indices,
-                    &mut domain_map, &mut range_map, &mut inverse_of_map, &mut symmetric_props, &mut transitive_props
-                );
+    // 1. Process local root file
+    let content = fs::read(input_file)?;
+    println!("Parsing root file: {}", input_file);
+    parse_content(
+        &content, format, &mut graph, &mut transitive_graphs, &mut transitive_indices,
+        &mut domain_map, &mut range_map, &mut inverse_of_map, &mut symmetric_props, &mut transitive_props, &mut imports_queue
+    );
+    
+    // 2. Process imported modules (eXtreme Design / OBDA modularity)
+    while let Some(url) = imports_queue.pop() {
+        if visited_urls.contains(&url) { continue; }
+        visited_urls.insert(url.clone());
+        println!("Resolving imported module: {}", url);
+        
+        let fetched_content = if url.starts_with("http") {
+            match reqwest::blocking::get(&url) {
+                Ok(resp) => resp.bytes().unwrap_or_default().to_vec(),
+                Err(e) => {
+                    eprintln!("Failed to fetch {}: {}", url, e);
+                    continue;
+                }
             }
-        }
-    } else if format == "turtle" {
-        for triple_res in TurtleParser::new().for_reader(reader) {
-            if let Ok(t_ox) = triple_res {
-                process_triple(
-                    t_ox.subject.to_string(), t_ox.predicate.as_str().to_string(), t_ox.object.to_string(),
-                    &mut graph, &mut transitive_graphs, &mut transitive_indices,
-                    &mut domain_map, &mut range_map, &mut inverse_of_map, &mut symmetric_props, &mut transitive_props
-                );
+        } else {
+            match fs::read(&url) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("Failed to read local import {}: {}", url, e);
+                    continue;
+                }
             }
-        }
+        };
+
+        // Assume standard W3C ontologies default to XML, but fallback to turtle automatically
+        parse_content(
+            &fetched_content, "xml", &mut graph, &mut transitive_graphs, &mut transitive_indices,
+            &mut domain_map, &mut range_map, &mut inverse_of_map, &mut symmetric_props, &mut transitive_props, &mut imports_queue
+        );
     }
+
+    println!("Modular parsing complete. Unified Graph Triples: {}", graph.len());
 
     // ABox Graph Materialization for dynamically discovered Transitive Properties
     for t in &graph {
@@ -144,7 +218,6 @@ fn main() -> io::Result<()> {
         }
     }
 
-    println!("Graph successfully parsed. Triples: {}", graph.len());
     let mut inferred_triples: HashSet<Triple> = HashSet::new();
 
     // Inference Rule 1: Transitive Closures (SubClassOf + Custom TransitiveProperties)
@@ -195,8 +268,6 @@ fn main() -> io::Result<()> {
         }
         // InverseOf Property
         if let Some(inv_pred) = inverse_of_map.get(&pred_with_brackets) {
-            // inv_pred has brackets, but pred should not have brackets.
-            // Let's strip brackets from inv_pred when assigning to pred.
             let clean_inv_pred = inv_pred.trim_start_matches('<').trim_end_matches('>').to_string();
             let inf_t = Triple { sub: t.obj.clone(), pred: clean_inv_pred, obj: t.sub.clone() };
             if !graph.contains(&inf_t) { inferred_triples.insert(inf_t); }
