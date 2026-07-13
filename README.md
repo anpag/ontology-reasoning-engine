@@ -44,7 +44,9 @@ By offloading the mathematical DL materialization to `petgraph`, this microservi
 
 | Ontology | Format | Initial Triples | Inferred Triples | Total Processing Time |
 | :--- | :--- | :--- | :--- | :--- |
+| **NCIT (NCI Thesaurus)** | XML | 10,769,587 | 2,955,662 | 2m 55.8s |
 | **ChEBI** | XML | 9,521,942 | 6,952,622 | 5m 31.6s |
+| **GO (Gene Ontology)** | XML | 1,444,892 | 926,782 | 42.5s |
 | **QUDT** | Turtle | 42,435 | 0 | 0.12s |
 
 ### What are "Inferred Triples"?
