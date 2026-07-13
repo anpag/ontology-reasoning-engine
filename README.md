@@ -1,6 +1,8 @@
 # GEB: Graph Entailment Backplane
 
-**Disclaimer:** This is a personal development project. It is not an official product of Google, nor is it endorsed by or affiliated with Google in any way.
+*An homage to Douglas Hofstadter's "Gödel, Escher, Bach: An Eternal Golden Braid"*
+
+Growing up, I was a massive fan of Douglas Hofstadter's work, particularly his exploration of formal logic, recursion, and self-referential systems in *Gödel, Escher, Bach* and *I Am a Strange Loop*. In Semantic Web engineering, Description Logic (DL) materialization operates on these exact same principles: the engine recursively forward-chains through ontology axioms, constantly feeding its own outputs back into itself until it reaches a logical fixpoint—a true "Strange Loop." This project is named **GEB (Graph Entailment Backplane)** as a backronym to honor the profound impact Hofstadter's writings had on my understanding of recursive logical systems.
 
 A highly scalable, memory-safe microservice designed to ingest massive Semantic Web Ontologies (OWL, Turtle, JSON-LD) and apply rigorous Description Logic materialization via Forward Chaining. It natively supports **OWL 2 RL/EL Profiles**, **eXtreme Design (XD) Modularity**, and **BigQuery Labeled Property Graph (LPG)** projections.
 
@@ -116,3 +118,6 @@ gcloud run deploy geb-engine \
   --cpu 4 \
   --allow-unauthenticated
 ```
+
+> [!WARNING]
+> **Disclaimer:** This is a personal development project. It is not an official product of Google, nor is it endorsed by or affiliated with Google in any way.
