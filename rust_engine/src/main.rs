@@ -71,9 +71,9 @@ fn process_triple(
     } else if pred == INVERSE_OF_URI {
         inverse_of_map.insert(sub.clone(), obj.clone());
         inverse_of_map.insert(obj.clone(), sub.clone()); // Bidirectional mapping
-    } else if pred == TYPE_URI && obj == SYMMETRIC_PROP_URI {
+    } else if pred == TYPE_URI && obj == format!("<{}>", SYMMETRIC_PROP_URI) {
         symmetric_props.insert(sub.clone());
-    } else if pred == TYPE_URI && obj == TRANSITIVE_PROP_URI {
+    } else if pred == TYPE_URI && obj == format!("<{}>", TRANSITIVE_PROP_URI) {
         transitive_props.insert(sub.clone());
     }
     
@@ -134,7 +134,8 @@ fn main() -> io::Result<()> {
 
     // ABox Graph Materialization for dynamically discovered Transitive Properties
     for t in &graph {
-        if transitive_props.contains(&t.pred) && t.pred != SUBCLASS_URI {
+        let pred_with_brackets = format!("<{}>", t.pred);
+        if transitive_props.contains(&pred_with_brackets) && t.pred != SUBCLASS_URI {
             let g = transitive_graphs.entry(t.pred.clone()).or_insert_with(DiGraph::new);
             let idx_map = transitive_indices.entry(t.pred.clone()).or_insert_with(HashMap::new);
             let sub_idx = get_or_insert_node(&t.sub, g, idx_map);
@@ -170,15 +171,16 @@ fn main() -> io::Result<()> {
 
     // Inference Rule 2: Domain, Range, Symmetric, InverseOf
     for t in &graph {
+        let pred_with_brackets = format!("<{}>", t.pred);
         // Domain
-        if let Some(domains) = domain_map.get(&t.pred) {
+        if let Some(domains) = domain_map.get(&pred_with_brackets) {
             for dom in domains {
                 let inf_t = Triple { sub: t.sub.clone(), pred: TYPE_URI.to_string(), obj: dom.clone() };
                 if !graph.contains(&inf_t) { inferred_triples.insert(inf_t); }
             }
         }
         // Range
-        if let Some(ranges) = range_map.get(&t.pred) {
+        if let Some(ranges) = range_map.get(&pred_with_brackets) {
             if !t.obj.starts_with('"') {
                 for ran in ranges {
                     let inf_t = Triple { sub: t.obj.clone(), pred: TYPE_URI.to_string(), obj: ran.clone() };
@@ -187,13 +189,16 @@ fn main() -> io::Result<()> {
             }
         }
         // Symmetric Property
-        if symmetric_props.contains(&t.pred) {
+        if symmetric_props.contains(&pred_with_brackets) {
             let inf_t = Triple { sub: t.obj.clone(), pred: t.pred.clone(), obj: t.sub.clone() };
             if !graph.contains(&inf_t) { inferred_triples.insert(inf_t); }
         }
         // InverseOf Property
-        if let Some(inv_pred) = inverse_of_map.get(&t.pred) {
-            let inf_t = Triple { sub: t.obj.clone(), pred: inv_pred.clone(), obj: t.sub.clone() };
+        if let Some(inv_pred) = inverse_of_map.get(&pred_with_brackets) {
+            // inv_pred has brackets, but pred should not have brackets.
+            // Let's strip brackets from inv_pred when assigning to pred.
+            let clean_inv_pred = inv_pred.trim_start_matches('<').trim_end_matches('>').to_string();
+            let inf_t = Triple { sub: t.obj.clone(), pred: clean_inv_pred, obj: t.sub.clone() };
             if !graph.contains(&inf_t) { inferred_triples.insert(inf_t); }
         }
     }
