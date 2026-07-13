@@ -44,11 +44,14 @@ By offloading the mathematical DL materialization to `petgraph`, this microservi
 
 | Ontology | Engine | Format | Initial Triples | Inferred Triples | Total Processing Time |
 | :--- | :--- | :--- | :--- | :--- | :--- |
+| **NCIT (NCI Thesaurus)** | HermiT (Java/JVM)* | XML | 10,769,587 | 2,955,662 | 10m 07.4s (607.4s) |
 | **NCIT (NCI Thesaurus)** | Native Rust | XML | 10,769,587 | 2,955,662 | **2m 55.8s** |
 | **ChEBI** | Native Rust | XML | 9,521,942 | 6,952,622 | **5m 31.6s** |
 | **GO (Gene Ontology)** | HermiT (Java/JVM) | XML | 1,444,892 | 926,782 | 1m 38.9s (98.9s) |
 | **GO (Gene Ontology)** | Native Rust | XML | 1,444,892 | 926,782 | **42.5s** |
 | **QUDT** | Native Rust | Turtle | 42,435 | 0 | **0.12s** |
+
+*\*Note: HermiT required 32GB of allocated JVM Heap Space to complete the NCIT benchmark without throwing an `OutOfMemoryError`.*
 
 ### What are "Inferred Triples"?
 In a semantic knowledge graph, not all relationships are explicitly stated. If an ontology states that *Aspirin* is a *Painkiller*, and a *Painkiller* is a *Drug*, the graph implicitly knows that *Aspirin* is a *Drug*. **Inferred Triples** are the new, mathematically deduced relationships our engine generates (via Transitive Closure rules like `rdfs:subClassOf`) that were not present in the original file. Materializing these inferred triples ahead of time means BigQuery can execute standard queries instantly without needing to calculate hierarchies on the fly.
