@@ -1,9 +1,13 @@
 import time
-from owlready2 import *
 import sys
+from owlready2 import *
+import owlready2.reasoning
+
+# Allocate 32GB of RAM to the JVM to prevent OutOfMemoryError on massive ontologies like NCIT
+owlready2.reasoning.JAVA_MEMORY = 32000
 
 def main(ontology_path):
-    print('Loading Ontology into owlready2...')
+    print(f'Loading Ontology ({ontology_path}) into owlready2...')
     start_load = time.time()
     try:
         onto = get_ontology(f'file://{ontology_path}').load()
@@ -12,7 +16,7 @@ def main(ontology_path):
         print(f'Load FAILED: {e}')
         return
 
-    print('Starting HermiT Reasoner (JVM)...')
+    print('Starting HermiT Reasoner (JVM allocated 32GB RAM)...')
     start_reason = time.time()
     try:
         with onto:
