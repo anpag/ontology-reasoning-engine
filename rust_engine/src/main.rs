@@ -9,6 +9,7 @@ use oxttl::TurtleParser;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::Bfs;
 use reqwest;
+use serde_json::{json, Map, Value};
 
 const SUBCLASS_URI: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 const TYPE_URI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -21,6 +22,11 @@ const SYMMETRIC_PROP_URI: &str = "http://www.w3.org/2002/07/owl#SymmetricPropert
 const TRANSITIVE_PROP_URI: &str = "http://www.w3.org/2002/07/owl#TransitiveProperty";
 // Phase 2: Modular Modeling & eXtreme Design
 const IMPORTS_URI: &str = "http://www.w3.org/2002/07/owl#imports";
+// Phase 3: N-ary Relations / BigQuery LPG Flattening
+const STATEMENT_URI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement";
+const SUBJECT_URI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#subject";
+const PREDICATE_URI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate";
+const OBJECT_URI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#object";
 
 #[derive(Hash, Eq, PartialEq, Clone)]
 struct Triple {
@@ -74,7 +80,7 @@ fn process_triple(
         range_map.entry(sub.clone()).or_default().push(obj.clone());
     } else if pred == INVERSE_OF_URI {
         inverse_of_map.insert(sub.clone(), obj.clone());
-        inverse_of_map.insert(obj.clone(), sub.clone()); // Bidirectional mapping
+        inverse_of_map.insert(obj.clone(), sub.clone());
     } else if pred == TYPE_URI && obj == format!("<{}>", SYMMETRIC_PROP_URI) {
         symmetric_props.insert(sub.clone());
     } else if pred == TYPE_URI && obj == format!("<{}>", TRANSITIVE_PROP_URI) {
@@ -136,21 +142,21 @@ fn parse_content(
 
     let first_try = if format_hint == "xml" { true } else { false };
     if !try_parse(first_try) {
-        // Fallback to the other parser if the hint was wrong
         try_parse(!first_try);
     }
 }
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
-    if args.len() < 4 {
-        eprintln!("Usage: custom_reasoner_rust <format: xml|turtle> <input_file> <output.nt>");
+    if args.len() < 5 {
+        eprintln!("Usage: custom_reasoner_rust <format: xml|turtle> <input_file> <output.nt> <output_edges.jsonl>");
         std::process::exit(1);
     }
 
     let format = &args[1];
     let input_file = &args[2];
     let output_file = &args[3];
+    let output_edges_file = &args[4];
 
     let mut graph: HashSet<Triple> = HashSet::new();
     let mut transitive_graphs: HashMap<String, DiGraph<String, ()>> = HashMap::new();
@@ -165,7 +171,6 @@ fn main() -> io::Result<()> {
     let mut imports_queue: Vec<String> = Vec::new();
     let mut visited_urls: HashSet<String> = HashSet::new();
 
-    // 1. Process local root file
     let content = fs::read(input_file)?;
     println!("Parsing root file: {}", input_file);
     parse_content(
@@ -173,7 +178,6 @@ fn main() -> io::Result<()> {
         &mut domain_map, &mut range_map, &mut inverse_of_map, &mut symmetric_props, &mut transitive_props, &mut imports_queue
     );
     
-    // 2. Process imported modules (eXtreme Design / OBDA modularity)
     while let Some(url) = imports_queue.pop() {
         if visited_urls.contains(&url) { continue; }
         visited_urls.insert(url.clone());
@@ -197,7 +201,6 @@ fn main() -> io::Result<()> {
             }
         };
 
-        // Assume standard W3C ontologies default to XML, but fallback to turtle automatically
         parse_content(
             &fetched_content, "xml", &mut graph, &mut transitive_graphs, &mut transitive_indices,
             &mut domain_map, &mut range_map, &mut inverse_of_map, &mut symmetric_props, &mut transitive_props, &mut imports_queue
@@ -206,7 +209,6 @@ fn main() -> io::Result<()> {
 
     println!("Modular parsing complete. Unified Graph Triples: {}", graph.len());
 
-    // ABox Graph Materialization for dynamically discovered Transitive Properties
     for t in &graph {
         let pred_with_brackets = format!("<{}>", t.pred);
         if transitive_props.contains(&pred_with_brackets) && t.pred != SUBCLASS_URI {
@@ -220,7 +222,6 @@ fn main() -> io::Result<()> {
 
     let mut inferred_triples: HashSet<Triple> = HashSet::new();
 
-    // Inference Rule 1: Transitive Closures (SubClassOf + Custom TransitiveProperties)
     for (pred_uri, g) in &transitive_graphs {
         for start_idx in g.node_indices() {
             let mut bfs = Bfs::new(g, start_idx);
@@ -242,17 +243,14 @@ fn main() -> io::Result<()> {
         }
     }
 
-    // Inference Rule 2: Domain, Range, Symmetric, InverseOf
     for t in &graph {
         let pred_with_brackets = format!("<{}>", t.pred);
-        // Domain
         if let Some(domains) = domain_map.get(&pred_with_brackets) {
             for dom in domains {
                 let inf_t = Triple { sub: t.sub.clone(), pred: TYPE_URI.to_string(), obj: dom.clone() };
                 if !graph.contains(&inf_t) { inferred_triples.insert(inf_t); }
             }
         }
-        // Range
         if let Some(ranges) = range_map.get(&pred_with_brackets) {
             if !t.obj.starts_with('"') {
                 for ran in ranges {
@@ -261,12 +259,10 @@ fn main() -> io::Result<()> {
                 }
             }
         }
-        // Symmetric Property
         if symmetric_props.contains(&pred_with_brackets) {
             let inf_t = Triple { sub: t.obj.clone(), pred: t.pred.clone(), obj: t.sub.clone() };
             if !graph.contains(&inf_t) { inferred_triples.insert(inf_t); }
         }
-        // InverseOf Property
         if let Some(inv_pred) = inverse_of_map.get(&pred_with_brackets) {
             let clean_inv_pred = inv_pred.trim_start_matches('<').trim_end_matches('>').to_string();
             let inf_t = Triple { sub: t.obj.clone(), pred: clean_inv_pred, obj: t.sub.clone() };
@@ -278,7 +274,59 @@ fn main() -> io::Result<()> {
     for t in &inferred_triples {
         writeln!(out, "{} <{}> {} .", t.sub, t.pred, t.obj)?;
     }
-
     println!("Petgraph Materialization Complete. Inferred {} triples.", inferred_triples.len());
+
+    // Phase 3: BigQuery Labeled Property Graph (LPG) Generation
+    // Translate standard RDF Reification patterns into rich JSON-L edges
+    let mut total_graph: HashSet<Triple> = graph.clone();
+    for t in inferred_triples {
+        total_graph.insert(t);
+    }
+
+    let statement_type_obj = format!("<{}>", STATEMENT_URI);
+    let mut statement_subjects: HashSet<String> = HashSet::new();
+    for t in &total_graph {
+        if t.pred == TYPE_URI && t.obj == statement_type_obj {
+            statement_subjects.insert(t.sub.clone());
+        }
+    }
+
+    let mut edges_out = File::create(output_edges_file)?;
+    let mut flattened_edges_count = 0;
+
+    for s in &statement_subjects {
+        let mut src = String::new();
+        let mut edge_label = String::new();
+        let mut dst = String::new();
+        let mut properties = Map::new();
+
+        for t in &total_graph {
+            if t.sub == *s {
+                if t.pred == SUBJECT_URI {
+                    src = t.obj.clone();
+                } else if t.pred == PREDICATE_URI {
+                    edge_label = t.obj.clone();
+                } else if t.pred == OBJECT_URI {
+                    dst = t.obj.clone();
+                } else if t.pred != TYPE_URI {
+                    // It's a property on the edge
+                    properties.insert(t.pred.clone(), json!(t.obj));
+                }
+            }
+        }
+
+        if !src.is_empty() && !edge_label.is_empty() && !dst.is_empty() {
+            let edge_json = json!({
+                "src": src,
+                "edge_label": edge_label,
+                "dst": dst,
+                "properties": properties
+            });
+            writeln!(edges_out, "{}", edge_json.to_string())?;
+            flattened_edges_count += 1;
+        }
+    }
+
+    println!("BigQuery LPG Flattening Complete. Generated {} rich edges.", flattened_edges_count);
     Ok(())
 }
