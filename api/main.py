@@ -106,51 +106,116 @@ def get_result(job_id: str):
         
     return FileResponse(out_nt, media_type="application/n-triples", filename=f"{job_id}_reasoned.nt")
 
-@app.get("/graph/{job_id}")
-def get_graph(job_id: str):
-    """
-    Parses the output N-Triples graph and returns Cytoscape-compatible JSON.
-    """
+GRAPH_CACHE = {}
+
+def get_cached_graph(job_id: str):
     if "/" in job_id or "\\" in job_id:
         raise HTTPException(status_code=400, detail="Invalid job ID")
         
+    if job_id in GRAPH_CACHE:
+        return GRAPH_CACHE[job_id]
+
     out_nt = os.path.join(tempfile.gettempdir(), f"{job_id}_out.nt")
     if not os.path.exists(out_nt):
         raise HTTPException(status_code=404, detail="Result not found or still processing.")
         
+    from rdflib import Graph
+    g = Graph()
     try:
-        from rdflib import Graph, URIRef, BNode, Literal
-        g = Graph()
         g.parse(out_nt, format="nt")
-        
-        elements = []
-        nodes = set()
-        
-        # Build Cytoscape JSON
-        for s, p, o in g:
-            # Source Node
-            s_id = str(s)
-            if s_id not in nodes:
-                nodes.add(s_id)
-                name = s_id.split("#")[-1] if "#" in s_id else s_id.split("/")[-1]
-                elements.append({"data": {"id": s_id, "name": name, "type": "class", "uri": s_id}})
-            
-            # Target Node (only add edge if object is another node, ignore literals for graph structure)
-            if isinstance(o, (URIRef, BNode)):
-                o_id = str(o)
-                if o_id not in nodes:
-                    nodes.add(o_id)
-                    name = o_id.split("#")[-1] if "#" in o_id else o_id.split("/")[-1]
-                    elements.append({"data": {"id": o_id, "name": name, "type": "class", "uri": o_id}})
-                
-                # Edge
-                edge_label = str(p).split("#")[-1] if "#" in str(p) else str(p).split("/")[-1]
-                elements.append({"data": {"source": s_id, "target": o_id, "label": edge_label}})
-                
-        return {"elements": elements}
     except Exception as e:
         logging.error(f"Error parsing graph: {e}")
-        raise HTTPException(status_code=500, detail="Error generating graph data.")
+        raise HTTPException(status_code=500, detail="Error parsing graph data.")
+    GRAPH_CACHE[job_id] = g
+    return g
+
+@app.get("/graph/{job_id}/roots")
+def get_graph_roots(job_id: str):
+    """
+    Returns the top-level classes (nodes with rdf:type owl:Class that do not have any outgoing rdfs:subClassOf edges).
+    """
+    g = get_cached_graph(job_id)
+    from rdflib import URIRef
+    from rdflib.namespace import RDF, RDFS, OWL
+    
+    roots = []
+    classes = set(g.subjects(RDF.type, OWL.Class))
+    
+    for c in classes:
+        if isinstance(c, URIRef):
+            has_parent = False
+            for obj in g.objects(c, RDFS.subClassOf):
+                if isinstance(obj, URIRef) and obj != c:
+                    has_parent = True
+                    break
+            
+            if not has_parent:
+                c_id = str(c)
+                name = c_id.split("#")[-1] if "#" in c_id else c_id.split("/")[-1]
+                roots.append({"data": {"id": c_id, "name": name, "type": "class", "uri": c_id}})
+                
+    return {"elements": roots}
+
+@app.get("/graph/{job_id}/expand")
+def get_graph_expand(job_id: str, node_uri: str):
+    """
+    Returns the 1-hop incoming and outgoing edges (and connected nodes) for the given URI in Cytoscape JSON format.
+    """
+    g = get_cached_graph(job_id)
+    from rdflib import URIRef, BNode
+    
+    target_node = URIRef(node_uri)
+    elements = []
+    nodes = set()
+    
+    def add_node(n):
+        n_id = str(n)
+        if n_id not in nodes:
+            nodes.add(n_id)
+            name = n_id.split("#")[-1] if "#" in n_id else n_id.split("/")[-1]
+            elements.append({"data": {"id": n_id, "name": name, "type": "class", "uri": n_id}})
+            
+    # Always include the target node itself
+    add_node(target_node)
+    
+    # Outgoing edges
+    for p, o in g.predicate_objects(target_node):
+        if isinstance(o, (URIRef, BNode)):
+            add_node(o)
+            edge_label = str(p).split("#")[-1] if "#" in str(p) else str(p).split("/")[-1]
+            elements.append({"data": {"source": str(target_node), "target": str(o), "label": edge_label}})
+            
+    # Incoming edges
+    for s, p in g.subject_predicates(target_node):
+        if isinstance(s, (URIRef, BNode)):
+            add_node(s)
+            edge_label = str(p).split("#")[-1] if "#" in str(p) else str(p).split("/")[-1]
+            elements.append({"data": {"source": str(s), "target": str(target_node), "label": edge_label}})
+            
+    return {"elements": elements}
+
+@app.get("/graph/{job_id}/degree")
+def get_graph_degree(job_id: str, node_uri: str):
+    """
+    Returns {"count": <integer>} representing the total number of incoming/outgoing edges for that URI.
+    """
+    g = get_cached_graph(job_id)
+    from rdflib import URIRef, BNode
+    
+    target_node = URIRef(node_uri)
+    count = 0
+    
+    # Outgoing
+    for p, o in g.predicate_objects(target_node):
+        if isinstance(o, (URIRef, BNode)):
+            count += 1
+            
+    # Incoming
+    for s, p in g.subject_predicates(target_node):
+        if isinstance(s, (URIRef, BNode)):
+            count += 1
+            
+    return {"count": count}
 
 @app.get("/health")
 def health_check():
