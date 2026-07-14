@@ -6,6 +6,8 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPExcept
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import json
+import logging
 
 app = FastAPI(title="GEB: Graph Entailment Backplane")
 
@@ -375,6 +377,95 @@ def get_graph_inferences(job_id: str):
         })
         
     return {"inferences": inferences}
+
+def find_matching_classes(g, text: str):
+    words = [w.strip().lower() for w in text.split() if len(w.strip()) > 3]
+    if not words:
+        return []
+        
+    matches = []
+    from rdflib.namespace import RDFS, SKOS
+    
+    seen_uris = set()
+    for s, p, o in g.triples((None, SKOS.prefLabel, None)):
+        val = str(o).lower()
+        if any(word in val or word in str(s).lower() for word in words):
+            uri = str(s)
+            if uri not in seen_uris:
+                seen_uris.add(uri)
+                matches.append({"uri": uri, "label": str(o)})
+                if len(matches) >= 15:
+                    break
+                    
+    if len(matches) < 15:
+        for s, p, o in g.triples((None, RDFS.label, None)):
+            val = str(o).lower()
+            if any(word in val or word in str(s).lower() for word in words):
+                uri = str(s)
+                if uri not in seen_uris:
+                    seen_uris.add(uri)
+                    matches.append({"uri": uri, "label": str(o)})
+                    if len(matches) >= 15:
+                        break
+                        
+    return matches
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list = []
+
+@app.post("/graph/{job_id}/chat")
+def chat_with_agent(job_id: str, req: ChatRequest):
+    """
+    Structured Gemini chat endpoint supporting dynamic visual actions.
+    """
+    g = get_cached_graph(job_id)
+    matches = find_matching_classes(g, req.message)
+    
+    import vertexai
+    from vertexai.generative_models import GenerativeModel
+    
+    vertexai.init(project="identity-res-e2e-10022026", location="global")
+    model = GenerativeModel("gemini-3.5-flash")
+    
+    system_prompt = f"""You are the "Semantic Agent", an advanced AI assistant designed to help the user navigate and query the ontology currently loaded in the dashboard.
+The active ontology job ID is: {job_id}.
+
+Here are some potential matching classes in the ontology that relate to the user's message:
+{json.dumps(matches, indent=2)}
+
+You have a direct integration with the Visual Editor. If the user asks you to:
+- Show, reveal, select, highlight, or jump to a specific class, choose the "reveal" action and specify its URI from the matches above.
+- Expand, search relationships, or show children/parents of a class, choose the "expand" action and specify its URI from the matches.
+
+If the request is purely informational (e.g., "What is a WorkPiece?"), do not output an action (set the action field to null).
+
+You MUST respond using the following JSON format:
+{{
+  "response": "your natural language text response here",
+  "action": {{
+    "type": "reveal" | "expand",
+    "uri": "http://uri-of-the-target-node"
+  }}
+}}
+If no action is needed, set the "action" field to null.
+Ensure the output is valid JSON."""
+
+    prompt = f"{system_prompt}\n\nChat History:\n"
+    for msg in req.history:
+        role = "User" if msg["role"] == "user" else "Agent"
+        prompt += f"{role}: {msg['text']}\n"
+    prompt += f"User: {req.message}\nAgent:"
+    
+    try:
+        response = model.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json"}
+        )
+        return json.loads(response.text)
+    except Exception as e:
+        logging.error(f"Chat agent error: {e}")
+        return {"response": f"Sorry, I encountered an error: {str(e)}", "action": None}
 
 @app.get("/health")
 def health_check():
