@@ -46,9 +46,10 @@ def process_ontology_background(file_path: str, format: str, mode: str, out_nt: 
     except Exception as e:
         logging.error(f"Error during background processing: {e}")
     finally:
-        # Cleanup uploaded file, keep the out_nt for the client to download
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        # We intentionally keep the original uploaded file because the Rust reasoner
+        # strips out literal annotations like rdfs:label. We need the original file 
+        # to restore these labels during visualization.
+        pass
 
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest_ontology(
@@ -91,6 +92,37 @@ async def ingest_ontology(
         job_id=job_id
     )
 
+@app.get("/ontologies")
+def list_ontologies():
+    """
+    Lists all available ontologies that have been processed and cached.
+    """
+    import glob
+    import os
+    import time
+    
+    pattern = os.path.join(tempfile.gettempdir(), "*_out.nt")
+    files = glob.glob(pattern)
+    
+    ontologies = []
+    for f in files:
+        basename = os.path.basename(f)
+        job_id = basename.replace("_out.nt", "")
+        stat = os.stat(f)
+        size_mb = round(stat.st_size / (1024 * 1024), 2)
+        created = time.ctime(stat.st_ctime)
+        
+        ontologies.append({
+            "job_id": job_id,
+            "name": job_id,
+            "size_mb": size_mb,
+            "created_at": created
+        })
+        
+    # Sort by created desc
+    ontologies.sort(key=lambda x: x["created_at"], reverse=True)
+    return {"ontologies": ontologies}
+
 @app.get("/result/{job_id}")
 def get_result(job_id: str):
     """
@@ -116,6 +148,8 @@ def get_cached_graph(job_id: str):
         return GRAPH_CACHE[job_id]
 
     out_nt = os.path.join(tempfile.gettempdir(), f"{job_id}_out.nt")
+    original_file = os.path.join(tempfile.gettempdir(), job_id)
+    
     if not os.path.exists(out_nt):
         raise HTTPException(status_code=404, detail="Result not found or still processing.")
         
@@ -123,36 +157,69 @@ def get_cached_graph(job_id: str):
     g = Graph()
     try:
         g.parse(out_nt, format="nt")
+        
+        # The inferred graph lacks labels, so we merge the original graph to recover them
+        if os.path.exists(original_file):
+            try:
+                from rdflib.namespace import OWL
+                fmt = "turtle" if original_file.endswith(".ttl") or original_file.endswith(".turtle") else "xml"
+                g.parse(original_file, format=fmt)
+                
+                # Recursively follow owl:imports to get labels from imported modules (like in EMMO)
+                imported_uris = set()
+                def load_imports(graph):
+                    new_imports = [str(o) for s, p, o in graph.triples((None, OWL.imports, None)) if str(o) not in imported_uris]
+                    for uri in new_imports:
+                        imported_uris.add(uri)
+                        try:
+                            logging.info(f"Following owl:imports -> {uri}")
+                            # Most imported ontologies are available as turtle or xml via content negotiation
+                            graph.parse(uri)
+                            load_imports(graph)
+                        except Exception as e:
+                            logging.warning(f"Failed to follow import {uri}: {e}")
+                            
+                load_imports(g)
+                logging.info(f"Successfully merged original graph {original_file} and its imports to recover labels.")
+            except Exception as e:
+                logging.error(f"Failed to parse original graph for labels: {e}")
+                
     except Exception as e:
         logging.error(f"Error parsing graph: {e}")
         raise HTTPException(status_code=500, detail="Error parsing graph data.")
+        
     GRAPH_CACHE[job_id] = g
     return g
+
+def get_node_label(g, node):
+    from rdflib.namespace import RDFS, SKOS
+    for label in g.objects(node, SKOS.prefLabel):
+        return str(label)
+    for label in g.objects(node, RDFS.label):
+        return str(label)
+    c_id = str(node)
+    return c_id.split("#")[-1] if "#" in c_id else c_id.split("/")[-1]
 
 @app.get("/graph/{job_id}/roots")
 def get_graph_roots(job_id: str):
     """
-    Returns the top-level classes (nodes with rdf:type owl:Class that do not have any outgoing rdfs:subClassOf edges).
+    Returns the top-level classes (nodes that are parents in subClassOf but never children).
     """
     g = get_cached_graph(job_id)
     from rdflib import URIRef
-    from rdflib.namespace import RDF, RDFS, OWL
+    from rdflib.namespace import RDFS
     
     roots = []
-    classes = set(g.subjects(RDF.type, OWL.Class))
+    parents = set(g.objects(predicate=RDFS.subClassOf))
+    children = set(g.subjects(predicate=RDFS.subClassOf))
     
-    for c in classes:
+    true_roots = parents - children
+    
+    for c in true_roots:
         if isinstance(c, URIRef):
-            has_parent = False
-            for obj in g.objects(c, RDFS.subClassOf):
-                if isinstance(obj, URIRef) and obj != c:
-                    has_parent = True
-                    break
-            
-            if not has_parent:
-                c_id = str(c)
-                name = c_id.split("#")[-1] if "#" in c_id else c_id.split("/")[-1]
-                roots.append({"data": {"id": c_id, "name": name, "type": "class", "uri": c_id}})
+            c_id = str(c)
+            name = get_node_label(g, c)
+            roots.append({"data": {"id": c_id, "name": name, "type": "class", "uri": c_id}})
                 
     return {"elements": roots}
 
@@ -172,7 +239,7 @@ def get_graph_expand(job_id: str, node_uri: str):
         n_id = str(n)
         if n_id not in nodes:
             nodes.add(n_id)
-            name = n_id.split("#")[-1] if "#" in n_id else n_id.split("/")[-1]
+            name = get_node_label(g, n)
             elements.append({"data": {"id": n_id, "name": name, "type": "class", "uri": n_id}})
             
     # Always include the target node itself
