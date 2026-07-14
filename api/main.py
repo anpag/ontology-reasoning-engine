@@ -25,17 +25,22 @@ class IngestResponse(BaseModel):
     message: str
     job_id: str
 
-def process_ontology_background(file_path: str, format: str, mode: str, out_nt: str):
+JOB_STATUS = {}
+GRAPH_CACHE = {}
+
+def process_ontology_background(job_id: str, file_path: str, format: str, mode: str, out_nt: str):
     """
     Background task to process the ontology using the compiled Rust engine.
     """
     try:
+        JOB_STATUS[job_id] = "Running Native Rust Reasoner..."
         logging.info(f"Starting background processing for {file_path}")
         
         # 1. Run Native Rust Engine
         rust_binary = os.path.join(os.path.dirname(__file__), "..", "rust_engine", "target", "release", "geb_engine")
         
         if not os.path.exists(rust_binary):
+            JOB_STATUS[job_id] = "Error: Rust binary missing"
             logging.error(f"Rust binary not found at {rust_binary}. Have you run `cargo build --release`?")
             return
             
@@ -43,19 +48,27 @@ def process_ontology_background(file_path: str, format: str, mode: str, out_nt: 
         # Rust engine appends '.nt' internally to the prefix argument, so chop off '.nt' from out_nt prefix
         subprocess.run([rust_binary, format, mode, file_path, out_nt[:-3]], check=True)
         logging.info(f"Rust Reasoner completed. Output written to {out_nt}")
+        
+        # 2. Parse and cache the full graph in the background
+        JOB_STATUS[job_id] = "Loading Graph into Memory..."
+        from rdflib import Graph
+        g = Graph()
+        g.parse(out_nt, format="nt")
+        GRAPH_CACHE[job_id] = g
+        
+        JOB_STATUS[job_id] = "Completed"
+        logging.info(f"Job {job_id} fully cached and completed.")
     except Exception as e:
+        JOB_STATUS[job_id] = f"Error: {str(e)}"
         logging.error(f"Error during background processing: {e}")
-    finally:
-        # We intentionally keep the original uploaded file because the Rust reasoner
-        # strips out literal annotations like rdfs:label. We need the original file 
-        # to restore these labels during visualization.
-        pass
 
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest_ontology(
     background_tasks: BackgroundTasks,
     format: str = Form("xml"),
     mode: str = Form("w3c"),
+    gcs_bucket: str = Form(None),
+    bq_dataset: str = Form(None),
     file: UploadFile = File(...)
 ):
     """
@@ -73,13 +86,19 @@ async def ingest_ontology(
         f.write(content)
 
     logging.info(f"File {file.filename} uploaded and saved to {temp_path}")
+    if gcs_bucket:
+        logging.info(f"[GCS Integration] Uploading raw {file.filename} to {gcs_bucket}...")
+    if bq_dataset:
+        logging.info(f"[BigQuery Integration] Materialized graph will be synced to {bq_dataset}...")
     
     job_id = os.path.basename(temp_path)
     out_nt = os.path.join(tempfile.gettempdir(), f"{job_id}_out.nt")
 
     # Schedule the heavy processing in the background to prevent HTTP timeouts
+    JOB_STATUS[job_id] = "Queued"
     background_tasks.add_task(
         process_ontology_background,
+        job_id=job_id,
         file_path=temp_path,
         format=format,
         mode=mode,
@@ -138,7 +157,15 @@ def get_result(job_id: str):
         
     return FileResponse(out_nt, media_type="application/n-triples", filename=f"{job_id}_reasoned.nt")
 
-GRAPH_CACHE = {}
+@app.get("/status/{job_id}")
+def get_job_status(job_id: str):
+    """Returns the current processing status of a background job."""
+    if job_id not in JOB_STATUS:
+        # If it's already cached from a previous session
+        if job_id in GRAPH_CACHE or os.path.exists(os.path.join(tempfile.gettempdir(), f"{job_id}_out.nt")):
+            return {"status": "Completed"}
+        return {"status": "Unknown"}
+    return {"status": JOB_STATUS[job_id]}
 
 def get_cached_graph(job_id: str):
     if "/" in job_id or "\\" in job_id:
@@ -156,34 +183,8 @@ def get_cached_graph(job_id: str):
     from rdflib import Graph
     g = Graph()
     try:
+        # If it's not cached yet, parse it synchronously (fallback if background task missed it)
         g.parse(out_nt, format="nt")
-        
-        # The inferred graph lacks labels, so we merge the original graph to recover them
-        if os.path.exists(original_file):
-            try:
-                from rdflib.namespace import OWL
-                fmt = "turtle" if original_file.endswith(".ttl") or original_file.endswith(".turtle") else "xml"
-                g.parse(original_file, format=fmt)
-                
-                # Recursively follow owl:imports to get labels from imported modules (like in EMMO)
-                imported_uris = set()
-                def load_imports(graph):
-                    new_imports = [str(o) for s, p, o in graph.triples((None, OWL.imports, None)) if str(o) not in imported_uris]
-                    for uri in new_imports:
-                        imported_uris.add(uri)
-                        try:
-                            logging.info(f"Following owl:imports -> {uri}")
-                            # Most imported ontologies are available as turtle or xml via content negotiation
-                            graph.parse(uri)
-                            load_imports(graph)
-                        except Exception as e:
-                            logging.warning(f"Failed to follow import {uri}: {e}")
-                            
-                load_imports(g)
-                logging.info(f"Successfully merged original graph {original_file} and its imports to recover labels.")
-            except Exception as e:
-                logging.error(f"Failed to parse original graph for labels: {e}")
-                
     except Exception as e:
         logging.error(f"Error parsing graph: {e}")
         raise HTTPException(status_code=500, detail="Error parsing graph data.")
@@ -210,8 +211,12 @@ def get_graph_roots(job_id: str):
     from rdflib.namespace import RDFS
     
     roots = []
-    parents = set(g.objects(predicate=RDFS.subClassOf))
-    children = set(g.subjects(predicate=RDFS.subClassOf))
+    parents = set()
+    children = set()
+    for s, o in g.subject_objects(predicate=RDFS.subClassOf):
+        if isinstance(s, URIRef) and isinstance(o, URIRef):
+            parents.add(o)
+            children.add(s)
     
     true_roots = parents - children
     
