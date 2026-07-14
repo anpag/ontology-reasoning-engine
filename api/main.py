@@ -252,14 +252,14 @@ def get_graph_expand(job_id: str, node_uri: str):
     
     # Outgoing edges
     for p, o in g.predicate_objects(target_node):
-        if isinstance(o, (URIRef, BNode)):
+        if isinstance(o, URIRef):
             add_node(o)
             edge_label = str(p).split("#")[-1] if "#" in str(p) else str(p).split("/")[-1]
             elements.append({"data": {"source": str(target_node), "target": str(o), "label": edge_label}})
             
     # Incoming edges
     for s, p in g.subject_predicates(target_node):
-        if isinstance(s, (URIRef, BNode)):
+        if isinstance(s, URIRef):
             add_node(s)
             edge_label = str(p).split("#")[-1] if "#" in str(p) else str(p).split("/")[-1]
             elements.append({"data": {"source": str(s), "target": str(target_node), "label": edge_label}})
@@ -288,6 +288,93 @@ def get_graph_degree(job_id: str, node_uri: str):
             count += 1
             
     return {"count": count}
+
+@app.get("/graph/{job_id}/node")
+def get_node_details(job_id: str, node_uri: str):
+    """
+    Retrieves all literal properties, types, and annotations for a specific node URI.
+    """
+    g = get_cached_graph(job_id)
+    from rdflib import URIRef, Literal
+    
+    subject_uri = URIRef(node_uri)
+    properties = {}
+    
+    for p, o in g.predicate_objects(subject_uri):
+        p_str = str(p)
+        prop_name = p_str.split("#")[-1] if "#" in p_str else p_str.split("/")[-1]
+        
+        # Format object value nicely (languages tags, literal parsing, etc.)
+        val = str(o)
+        if isinstance(o, Literal) and o.language:
+            val = f"{val} (@{o.language})"
+            
+        if prop_name not in properties:
+            properties[prop_name] = []
+        if val not in properties[prop_name]:
+            properties[prop_name].append(val)
+            
+    return {"uri": node_uri, "properties": properties}
+
+@app.get("/graph/{job_id}/source")
+def get_graph_source(job_id: str):
+    """
+    Returns the first 1000 lines of the materialized NT file.
+    """
+    if "/" in job_id or "\\" in job_id:
+        raise HTTPException(status_code=400, detail="Invalid job ID")
+    out_nt = os.path.join(tempfile.gettempdir(), f"{job_id}_out.nt")
+    if not os.path.exists(out_nt):
+        raise HTTPException(status_code=404, detail="Ontology source not found.")
+        
+    lines = []
+    try:
+        with open(out_nt, "r", encoding="utf-8") as f:
+            for _ in range(1000):
+                line = f.readline()
+                if not line:
+                    break
+                lines.append(line)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+        
+    return {"source": "".join(lines), "truncated": len(lines) == 1000}
+
+@app.get("/graph/{job_id}/inferences")
+def get_graph_inferences(job_id: str):
+    """
+    Computes inferred triples (Total - Asserted) and returns a sample.
+    """
+    if "/" in job_id or "\\" in job_id:
+        raise HTTPException(status_code=400, detail="Invalid job ID")
+        
+    g_total = get_cached_graph(job_id)
+    
+    original_file = os.path.join(tempfile.gettempdir(), job_id)
+    original_format = "turtle" if job_id.endswith(".turtle") else "xml"
+    
+    if not os.path.exists(original_file):
+        raise HTTPException(status_code=404, detail="Original asserted ontology not found.")
+        
+    from rdflib import Graph
+    g_asserted = Graph()
+    try:
+        g_asserted.parse(original_file, format=original_format)
+    except Exception as e:
+        logging.error(f"Error parsing asserted graph: {e}")
+        pass
+        
+    g_inferred = g_total - g_asserted
+    
+    inferences = []
+    for s, p, o in list(g_inferred)[:1000]:
+        inferences.append({
+            "subject": str(s),
+            "predicate": str(p).split("#")[-1] if "#" in str(p) else str(p).split("/")[-1],
+            "object": str(o)
+        })
+        
+    return {"inferences": inferences}
 
 @app.get("/health")
 def health_check():
