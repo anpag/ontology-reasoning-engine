@@ -278,25 +278,41 @@ def get_graph_expand(job_id: str, node_uri: str):
         n_id = str(n)
         if n_id not in nodes:
             nodes.add(n_id)
-            name = get_node_label(g, n)
-            elements.append({"data": {"id": n_id, "name": name, "type": "class", "uri": n_id}})
+            if isinstance(n, BNode):
+                name = format_rdf_object(g, n)
+                elements.append({"data": {"id": n_id, "name": name, "type": "restriction", "uri": n_id}})
+            else:
+                name = get_node_label(g, n)
+                elements.append({"data": {"id": n_id, "name": name, "type": "class", "uri": n_id}})
             
     # Always include the target node itself
     add_node(target_node)
     
     # Outgoing edges
     for p, o in g.predicate_objects(target_node):
-        if isinstance(o, URIRef):
-            add_node(o)
-            edge_label = str(p).split("#")[-1] if "#" in str(p) else str(p).split("/")[-1]
-            elements.append({"data": {"source": str(target_node), "target": str(o), "label": edge_label}})
+        if isinstance(o, URIRef) or isinstance(o, BNode):
+            is_valid = True
+            if isinstance(o, BNode):
+                from rdflib.namespace import OWL
+                is_valid = len(list(g.objects(o, OWL.onProperty))) > 0
+                
+            if is_valid:
+                add_node(o)
+                edge_label = str(p).split("#")[-1] if "#" in str(p) else str(p).split("/")[-1]
+                elements.append({"data": {"source": str(target_node), "target": str(o), "label": edge_label}})
             
     # Incoming edges
     for s, p in g.subject_predicates(target_node):
-        if isinstance(s, URIRef):
-            add_node(s)
-            edge_label = str(p).split("#")[-1] if "#" in str(p) else str(p).split("/")[-1]
-            elements.append({"data": {"source": str(s), "target": str(target_node), "label": edge_label}})
+        if isinstance(s, URIRef) or isinstance(s, BNode):
+            is_valid = True
+            if isinstance(s, BNode):
+                from rdflib.namespace import OWL
+                is_valid = len(list(g.objects(s, OWL.onProperty))) > 0
+                
+            if is_valid:
+                add_node(s)
+                edge_label = str(p).split("#")[-1] if "#" in str(p) else str(p).split("/")[-1]
+                elements.append({"data": {"source": str(s), "target": str(target_node), "label": edge_label}})
             
     return {"elements": elements}
 
