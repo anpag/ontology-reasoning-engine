@@ -40,7 +40,8 @@ def process_ontology_background(file_path: str, format: str, mode: str, out_nt: 
             return
             
         logging.info("Executing Rust Reasoner...")
-        subprocess.run([rust_binary, format, mode, file_path, out_nt], check=True)
+        # Rust engine appends '.nt' internally to the prefix argument, so chop off '.nt' from out_nt prefix
+        subprocess.run([rust_binary, format, mode, file_path, out_nt[:-3]], check=True)
         logging.info(f"Rust Reasoner completed. Output written to {out_nt}")
     except Exception as e:
         logging.error(f"Error during background processing: {e}")
