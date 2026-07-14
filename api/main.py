@@ -203,6 +203,38 @@ def get_node_label(g, node):
     c_id = str(node)
     return c_id.split("#")[-1] if "#" in c_id else c_id.split("/")[-1]
 
+def format_rdf_object(g, o):
+    from rdflib import URIRef, BNode, Literal
+    from rdflib.namespace import OWL
+    
+    if isinstance(o, BNode):
+        # Check if it is an OWL restriction
+        on_prop = list(g.objects(o, OWL.onProperty))
+        if on_prop:
+            prop_label = get_node_label(g, on_prop[0])
+            
+            some_vals = list(g.objects(o, OWL.someValuesFrom))
+            if some_vals:
+                val_label = get_node_label(g, some_vals[0])
+                return f"∃ {prop_label} . {val_label}"
+                
+            all_vals = list(g.objects(o, OWL.allValuesFrom))
+            if all_vals:
+                val_label = get_node_label(g, all_vals[0])
+                return f"∀ {prop_label} . {val_label}"
+                
+            has_val = list(g.objects(o, OWL.hasValue))
+            if has_val:
+                val_label = get_node_label(g, has_val[0])
+                return f"{prop_label} ∋ {val_label}"
+                
+        return "[Anonymous Restriction]"
+        
+    elif isinstance(o, URIRef):
+        return get_node_label(g, o)
+        
+    return str(o)
+
 @app.get("/graph/{job_id}/roots")
 def get_graph_roots(job_id: str):
     """
@@ -306,8 +338,8 @@ def get_node_details(job_id: str, node_uri: str):
         p_str = str(p)
         prop_name = p_str.split("#")[-1] if "#" in p_str else p_str.split("/")[-1]
         
-        # Format object value nicely (languages tags, literal parsing, etc.)
-        val = str(o)
+        # Format object value nicely (languages tags, literal parsing, description logic, labels)
+        val = format_rdf_object(g, o)
         if isinstance(o, Literal) and o.language:
             val = f"{val} (@{o.language})"
             
