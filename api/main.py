@@ -25,7 +25,7 @@ class IngestResponse(BaseModel):
     message: str
     job_id: str
 
-def process_ontology_background(file_path: str, format: str, out_nt: str):
+def process_ontology_background(file_path: str, format: str, mode: str, out_nt: str):
     """
     Background task to process the ontology using the compiled Rust engine.
     """
@@ -40,7 +40,7 @@ def process_ontology_background(file_path: str, format: str, out_nt: str):
             return
             
         logging.info("Executing Rust Reasoner...")
-        subprocess.run([rust_binary, format, file_path, out_nt], check=True)
+        subprocess.run([rust_binary, format, mode, file_path, out_nt], check=True)
         logging.info(f"Rust Reasoner completed. Output written to {out_nt}")
     except Exception as e:
         logging.error(f"Error during background processing: {e}")
@@ -53,6 +53,7 @@ def process_ontology_background(file_path: str, format: str, out_nt: str):
 async def ingest_ontology(
     background_tasks: BackgroundTasks,
     format: str = Form("xml"),
+    mode: str = Form("w3c"),
     file: UploadFile = File(...)
 ):
     """
@@ -60,6 +61,8 @@ async def ingest_ontology(
     """
     if format not in ["xml", "turtle"]:
         return JSONResponse(status_code=400, content={"error": "format must be 'xml' or 'turtle'"})
+    if mode not in ["w3c", "lpg"]:
+        return JSONResponse(status_code=400, content={"error": "mode must be 'w3c' or 'lpg'"})
 
     # Save uploaded file to a temporary location
     fd, temp_path = tempfile.mkstemp(suffix=f".{format}")
@@ -77,6 +80,7 @@ async def ingest_ontology(
         process_ontology_background,
         file_path=temp_path,
         format=format,
+        mode=mode,
         out_nt=out_nt
     )
 
